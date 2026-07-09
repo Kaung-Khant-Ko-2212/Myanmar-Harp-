@@ -1,0 +1,330 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Deep dark base - modern music app */
+    --background: 240 10% 4%;
+    --foreground: 0 0% 95%;
+
+    /* Card surfaces */
+    --card: 240 10% 8%;
+    --card-foreground: 0 0% 95%;
+
+    /* Glass surfaces */
+    --popover: 240 10% 10%;
+    --popover-foreground: 0 0% 95%;
+
+    /* Vibrant violet primary */
+    --primary: 270 95% 65%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Deep purple secondary */
+    --secondary: 280 60% 25%;
+    --secondary-foreground: 0 0% 95%;
+
+    /* Muted tones */
+    --muted: 240 10% 15%;
+    --muted-foreground: 240 5% 55%;
+
+    /* Cyan accent */
+    --accent: 190 95% 50%;
+    --accent-foreground: 240 10% 4%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 10% 18%;
+    --input: 240 10% 18%;
+    --ring: 270 95% 65%;
+
+    --radius: 1rem;
+    --site-nav-height: 4rem;
+
+    /* Gradients - vibrant violet to cyan */
+    --gradient-primary: linear-gradient(135deg, hsl(270 95% 65%), hsl(190 95% 50%));
+    --gradient-glow: linear-gradient(180deg, hsl(270 95% 65% / 0.3), hsl(190 95% 50% / 0.1));
+    --gradient-card: linear-gradient(135deg, hsl(240 10% 12% / 0.8), hsl(240 10% 6% / 0.9));
+
+    /* Shadows - violet glow */
+    --shadow-glow-sm: 0 0 20px hsl(270 95% 65% / 0.15);
+    --shadow-glow-md: 0 0 40px hsl(270 95% 65% / 0.2);
+    --shadow-glow-lg: 0 0 60px hsl(270 95% 65% / 0.25);
+
+    --sidebar-background: 240 10% 8%;
+    --sidebar-foreground: 0 0% 95%;
+    --sidebar-primary: 270 95% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 190 95% 50%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 240 10% 18%;
+    --sidebar-ring: 270 95% 65%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Manrope', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Manrope', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  /* Glassmorphism */
+  .glass {
+    @apply bg-card/60 backdrop-blur-xl border border-white/10;
+    box-shadow: var(--shadow-glow-sm);
+  }
+
+  .glass-strong {
+    @apply bg-card/80 backdrop-blur-2xl border border-white/15;
+    box-shadow: var(--shadow-glow-md);
+  }
+
+  /* Glow effects */
+  .glow-primary {
+    box-shadow: var(--shadow-glow-md);
+  }
+
+  .text-glow-primary {
+    text-shadow: 0 0 20px hsl(var(--primary) / 0.6);
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-primary);
+  }
+
+  .lift-card {
+    transform: translateY(0);
+    transition:
+      transform 260ms ease,
+      border-color 260ms ease,
+      background-color 260ms ease,
+      box-shadow 260ms ease;
+  }
+
+  .lift-card:hover {
+    transform: translateY(-6px);
+    box-shadow:
+      0 24px 70px hsl(var(--accent) / 0.08),
+      0 0 0 1px hsl(var(--accent) / 0.08);
+  }
+
+  .icon-tile {
+    transition:
+      transform 300ms ease,
+      border-color 300ms ease,
+      background-color 300ms ease,
+      box-shadow 300ms ease;
+  }
+
+  .group:hover .icon-tile {
+    transform: translateY(-2px) scale(1.06) rotate(-2deg);
+    box-shadow: 0 12px 28px hsl(var(--accent) / 0.12);
+  }
+
+  .architecture-figure {
+    position: relative;
+    transition:
+      transform 320ms ease,
+      border-color 320ms ease,
+      box-shadow 320ms ease;
+  }
+
+  .architecture-figure:hover {
+    border-color: hsl(var(--accent) / 0.32);
+    box-shadow:
+      0 22px 64px rgb(0 0 0 / 0.28),
+      0 0 30px hsl(var(--accent) / 0.08);
+  }
+
+  .architecture-image {
+    transition: filter 320ms ease;
+  }
+
+  .architecture-figure:hover .architecture-image {
+    filter: drop-shadow(0 16px 28px rgb(0 0 0 / 0.24));
+  }
+
+  .animate-card-enter {
+    animation: card-enter 520ms ease both;
+  }
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--site-nav-height);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-background;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* String animation keyframes */
+@keyframes string-vibrate {
+  0%, 100% { 
+    transform: translateX(0) scaleY(1);
+    opacity: 0.6;
+  }
+  25% { 
+    transform: translateX(2px) scaleY(1.02);
+    opacity: 1;
+  }
+  50% { 
+    transform: translateX(-1px) scaleY(0.98);
+    opacity: 0.8;
+  }
+  75% { 
+    transform: translateX(1px) scaleY(1.01);
+    opacity: 1;
+  }
+}
+
+@keyframes scan-line {
+  0% {
+    top: 0%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 0.4;
+    filter: blur(20px);
+  }
+  50% {
+    opacity: 0.7;
+    filter: blur(30px);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-20px) rotate(2deg);
+  }
+}
+
+@keyframes note-appear {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes wave {
+  0%, 100% {
+    d: path("M0,50 Q25,30 50,50 T100,50");
+  }
+  50% {
+    d: path("M0,50 Q25,70 50,50 T100,50");
+  }
+}
+
+.animate-string-vibrate {
+  animation: string-vibrate 1.5s ease-in-out infinite;
+}
+
+.animate-scan-line {
+  animation: scan-line 3s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-note-appear {
+  animation: note-appear 0.6s ease-out forwards;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.3), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lift-card,
+  .icon-tile,
+  .architecture-figure,
+  .architecture-image,
+  .animate-card-enter {
+    animation: none;
+    transition: none;
+  }
+
+  .lift-card:hover,
+  .architecture-figure:hover,
+  .architecture-figure:hover .architecture-image,
+  .group:hover .icon-tile {
+    transform: none;
+  }
+}

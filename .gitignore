@@ -1,0 +1,76 @@
+# Operating system / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node / frontend
+node_modules/
+myanma-saung-main/node_modules/
+myanma-saung-main/dist/
+myanma-saung-main/dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime logs
+logs/
+*.log
+.run-logs/
+backend/*stdout*.log
+backend/*stderr*.log
+myanma-saung-main/*dev*.log
+
+# Generated backend artifacts
+backend/uploads/
+backend/predict_postprocessed/
+backend/cache/
+backend/debug_reports/
+backend/touch_events/
+
+# Generated experiment outputs
+outputs/
+runs/
+hand-detection/out/
+saung_strike_video_farneback_rules/outputs/
+saung_strike_video_farneback_rules/touch_events.csv
+
+# Local input media and extracted audio
+*.mp4
+*.mov
+*.webm
+*.avi
+*.wav
+!myanma-saung-main/public/intro-burmese-harp.mp4
+
+# Model weights are intentionally not committed.
+# Restore them at: harp_pose_v11m_prepped/weights/best.pt
+*.pt
+*.pth
+*.onnx
+
+# Build/package caches
+.cache/
+.parcel-cache/
+.vite/

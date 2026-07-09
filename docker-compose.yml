@@ -1,0 +1,42 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: harp-predict-backend
+    ports:
+      - '8000:8000'
+    volumes:
+      - ./backend:/app:cached
+      - ./backend/uploads:/app/uploads
+      - ./backend/predict_postprocessed:/app/predict_postprocessed
+      - ./backend/cache:/app/cache
+      - ./harp_pose_v11m_prepped:/app/harp_pose_v11m_prepped:ro
+      - ./saung_strike_video_farneback_rules:/app/saung_strike_video_farneback_rules:ro
+      - ./configs:/app/configs:ro
+      - ./src:/app/src:cached
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+
+  frontend:
+    build:
+      context: ./myanma-saung-main
+      dockerfile: Dockerfile
+    container_name: harp-predict-frontend
+    ports:
+      - '5173:5173'
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    volumes:
+      - ./myanma-saung-main:/app:cached
+      - /app/node_modules
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    depends_on:
+      - backend
+
+networks:
+  default:
+    name: harp-predict-network

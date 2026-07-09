@@ -1,0 +1,34 @@
+# Recommended Python: 3.10 or 3.11
+# This repository includes OpenCV, MediaPipe, Ultralytics, and optional
+# pitch / RTMPose tooling that can be difficult to install on Python 3.13.
+
+# Backend API
+fastapi
+uvicorn
+python-multipart
+
+# Core CV / audio pipeline
+numpy
+opencv-python
+ultralytics
+torch
+mediapipe
+imageio-ffmpeg
+librosa
+soundfile
+PyYAML
+
+# Analysis / reporting scripts
+matplotlib
+
+# Optional pitch-identification backends used by `src/audio/pitch.py`
+# Required only when `audio.decision_mode` uses pitch matching instead of the
+# default onset-only mode.
+crepe
+torchcrepe
+
+# Optional alternate hand-detection script:
+# `hand-detection/rtmpose_hand_video.py`
+# MMPose often also needs matching OpenMMLab runtime packages installed for the
+# target CPU/CUDA environment.
+mmpose

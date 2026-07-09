@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "description": "Default 16-string tuning table placeholder. Replace with instrument/session-specific tuning for best accuracy."
+  },
+  "strings": [
+    { "string_id": 1, "note_name": "A2", "frequency_hz": 110.00 },
+    { "string_id": 2, "note_name": "B2", "frequency_hz": 123.47 },
+    { "string_id": 3, "note_name": "C3", "frequency_hz": 130.81 },
+    { "string_id": 4, "note_name": "D3", "frequency_hz": 146.83 },
+    { "string_id": 5, "note_name": "E3", "frequency_hz": 164.81 },
+    { "string_id": 6, "note_name": "F3", "frequency_hz": 174.61 },
+    { "string_id": 7, "note_name": "G3", "frequency_hz": 196.00 },
+    { "string_id": 8, "note_name": "A3", "frequency_hz": 220.00 },
+    { "string_id": 9, "note_name": "B3", "frequency_hz": 246.94 },
+    { "string_id": 10, "note_name": "C4", "frequency_hz": 261.63 },
+    { "string_id": 11, "note_name": "D4", "frequency_hz": 293.66 },
+    { "string_id": 12, "note_name": "E4", "frequency_hz": 329.63 },
+    { "string_id": 13, "note_name": "F4", "frequency_hz": 349.23 },
+    { "string_id": 14, "note_name": "G4", "frequency_hz": 392.00 },
+    { "string_id": 15, "note_name": "A4", "frequency_hz": 440.00 },
+    { "string_id": 16, "note_name": "B4", "frequency_hz": 493.88 }
+  ]
+}

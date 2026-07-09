@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+ultralytics
+opencv-python
+numpy
+imageio-ffmpeg
+mediapipe
+librosa
+soundfile
+PyYAML
+python-multipart

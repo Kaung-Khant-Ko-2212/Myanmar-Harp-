@@ -1,0 +1,106 @@
+fps: 60
+
+windows:
+  baseline_sec: 0.25
+  action_sec: 0.20
+  action_start_frame_offset: 1
+  baseline_gap_frames: 0
+  dynamic_action_enabled: false
+  dynamic_offsets: [-2, -1, 0, 1, 2, 3, 4, 5, 6]
+  dynamic_select_metric: "max_impulse"
+
+candidates:
+  candidate_radius_default: 1
+  candidate_radius_close_contact: 0
+  contact_dist_px_thr: 8
+  geometry_enabled: false
+  geometry_top_k: 5
+  geometry_max_distance_px: 35.0
+  always_include_touched_id: true
+  include_id_radius_fallback: true
+  missing_touched_id_fallback: "none"
+  fallback_top_k: 3
+  fallback_max_distance_px: 40.0
+  log_string_id_inconsistency: true
+
+ROI:
+  roi_h: 28
+  roi_w: 128
+  roi_thickness_px: 10
+  trim_ends_ratio: 0.15
+  center_band_h: 10
+  adaptive_enabled: false
+  adaptive_height_ratio: 0.45
+  min_roi_h: 5
+  max_roi_h: 18
+  min_neighbor_distance_px: 4.0
+  reject_if_neighbor_overlap: false
+  reject_if_out_of_frame: false
+  border_mode: "replicate"
+  constant_border_value: 0
+  min_inside_fraction: 0.95
+
+farneback_params:
+  pyr_scale: 0.5
+  levels: 3
+  winsize: 15
+  iterations: 3
+  poly_n: 5
+  poly_sigma: 1.2
+  flags: 0
+  pre_blur: true
+
+vibration:
+  dy_thr: 0.40
+
+rules:
+  z_thr: 2.35
+  thr_peak: 5.0
+  thr_duration_frames: 2
+  thr_impulse: 9.0
+  thr_domination_ratio: 1.7
+  normalization_mode: "zscore"
+  min_scale: 0.05
+  mad_scale_factor: 1.4826
+  percentile_low: 25
+  percentile_high: 75
+  require_absolute_motion: false
+  min_action_mean: 0.02
+  min_action_max: 0.05
+  max_baseline_mean: null
+
+global_shake:
+  thr_global_median_peak: 5.0
+  thr_many_strings_vibrating: 6
+  shake_probe_count: 6
+
+finger_gating:
+  enable_finger_gate: false
+  thumb_gate:
+    vel_drop_frames: 6
+    min_vel_before: 2.0
+    max_vel_after: 1.2
+  index_gate:
+    vel_drop_frames: 6
+    min_vel_before: 2.0
+    max_vel_after: 1.2
+
+masking:
+  enable_hand_mask: true
+  hand_mask_expand_px: 6
+  mode: "finger_point"
+  contact_band_exclusion_px: 10.0
+  mask_contact_region: true
+
+frame_transitions:
+  allow_small_gaps: false
+  max_gap_frames: 2
+  normalize_by_gap: true
+
+decision:
+  right_finger_types:
+    - thumb
+    - index
+
+stabilization:
+  enabled: true

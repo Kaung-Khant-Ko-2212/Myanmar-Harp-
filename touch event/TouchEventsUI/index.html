@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Touch Events Analysis Dashboard</title>
+    <style>
+        :root {
+            --bg-base: #0f172a;
+            --bg-glass: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-primary: #3b82f6;
+            --accent-secondary: #8b5cf6;
+            --border-glass: rgba(255, 255, 255, 0.1);
+            --success: #4ade80;
+            --error: #f87171;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg-base);
+            color: var(--text-main);
+            min-height: 100vh;
+            background-image:
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+            padding: 2rem;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-section {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 1rem;
+            padding: 2.5rem;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease;
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .input-group label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+        }
+
+        .input-group input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-glass);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-family: inherit;
+            width: 100px;
+        }
+
+        .btn-upload {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            color: white;
+            padding: 0.875rem 2.5rem;
+            border-radius: 2rem;
+            cursor: pointer;
+            font-weight: 600;
+            display: inline-block;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+            font-size: 1.1rem;
+        }
+
+        /* Dashboard Grid */
+        .dashboard {
+            display: none;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        .card {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h3 {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .card .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .classification-grid {
+            display: none;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            animation: fadeIn 1s ease-out;
+        }
+
+        .table-container {
+            display: none;
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            overflow-x: auto;
+            animation: fadeIn 1.2s ease-out;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            color: var(--text-muted);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-glass);
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .on-beat {
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .off-beat {
+            color: var(--error);
+            opacity: 0.8;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" id="mainApp">
+        <header>
+            <h1>Touch Events Dashboard</h1>
+            <p style="color: var(--text-muted);">Musical Beat Analysis & Event Classification</p>
+        </header>
+
+        <div class="upload-section">
+            <div>
+                <label for="fileInput" class="btn-upload">Select JSON File</label>
+                <input type="file" id="fileInput" accept=".json">
+            </div>
+
+            <div class="controls-row">
+                <div class="input-group">
+                    <label>Tempo (BPM)</label>
+                    <input type="number" id="bpmInput" value="120" min="20" max="400">
+                </div>
+                <div class="input-group">
+                    <label>Tolerance (s)</label>
+                    <input type="number" id="toleranceInput" value="0.1" step="0.01" min="0.01" max="1.0">
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard" id="overview">
+            <div class="card">
+                <h3>Video</h3>
+                <div class="value" id="valVideo"
+                    style="font-size: 1.1rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;">-</div>
+            </div>
+            <div class="card">
+                <h3>Frames</h3>
+                <div class="value" id="valFrames">-</div>
+            </div>
+            <div class="card">
+                <h3>BPM / Int.</h3>
+                <div class="value" id="valBPM" style="font-size: 1.4rem;">-</div>
+            </div>
+            <div class="card">
+                <h3>Events</h3>
+                <div class="value" id="valEvents">-</div>
+            </div>
+            <div class="card" style="border-left: 4px solid var(--accent-primary);">
+                <h3>Accuracy</h3>
+                <div class="value" id="valAccuracy" style="color: var(--success);">-</div>
+            </div>
+        </div>
+
+        <div class="classification-grid" id="classifications">
+            <div class="card">
+                <h3>By Hand</h3>
+                <div id="handStats"></div>
+            </div>
+            <div class="card">
+                <h3>By Fingertip</h3>
+                <div id="fingerStats"></div>
+            </div>
+            <div class="card">
+                <h3>String IDs</h3>
+                <div id="stringStats"></div>
+            </div>
+        </div>
+
+        <div class="table-container" id="eventsTable">
+            <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+                <h3>Event Log</h3>
+                <span id="pageInfo" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time (s)</th>
+                        <th>Frame</th>
+                        <th>Hand</th>
+                        <th>Finger</th>
+                        <th>String</th>
+                        <th>Beat</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+            <div style="margin-top: 1rem; text-align: right;">
+                <button onclick="changePage(-1)"
+                    style="padding: 0.5rem 1rem; background: transparent; border: 1px solid var(--border-glass); color: white; cursor: pointer;">Prev</button>
+                <button onclick="changePage(1)"
+                    style="padding: 0.5rem 1rem; background: transparent; border: 1px solid var(--border-glass); color: white; cursor: pointer;">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let rawData = null;
+        let allEvents = [];
+        let currentPage = 1;
+        const pageSize = 50;
+
+        // Listen for control changes
+        document.getElementById('bpmInput').addEventListener('input', () => { if (rawData) processData(rawData); });
+        document.getElementById('toleranceInput').addEventListener('input', () => { if (rawData) processData(rawData); });
+
+        document.getElementById('fileInput').addEventListener('change', function (e) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    rawData = JSON.parse(e.target.result);
+                    processData(rawData);
+                } catch (err) { alert("Parsing error"); }
+            };
+            reader.readAsText(e.target.files[0]);
+        });
+
+        function processData(data) {
+            document.getElementById('overview').style.display = 'grid';
+            document.getElementById('classifications').style.display = 'grid';
+            document.getElementById('eventsTable').style.display = 'block';
+
+            const bpm = parseFloat(document.getElementById('bpmInput').value) || 120;
+            const tol = parseFloat(document.getElementById('toleranceInput').value) || 0.1;
+            const interval = 60 / bpm;
+
+            document.getElementById('valVideo').textContent = data.video_name || '-';
+            document.getElementById('valFrames').textContent = data.frames_processed || '-';
+            document.getElementById('valBPM').textContent = `${bpm} / ${interval.toFixed(2)}s`;
+
+            // Filter Pinky
+            allEvents = (data.touch_events || []).filter(ev => ev.fingertip !== 'pinky_tip');
+
+            let onBeatCount = 0;
+            const hands = {}, fingers = {}, strings = {};
+
+            allEvents.forEach(ev => {
+                const time = ev.time_sec;
+                const rem = time % interval;
+                ev.onBeat = (rem < tol) || (interval - rem < tol);
+                if (ev.onBeat) onBeatCount++;
+
+                hands[ev.hand] = (hands[ev.hand] || 0) + 1;
+                fingers[ev.fingertip] = (fingers[ev.fingertip] || 0) + 1;
+                strings[ev.string_id] = (strings[ev.string_id] || 0) + 1;
+            });
+
+            const accuracy = (onBeatCount / allEvents.length * 100);
+            document.getElementById('valAccuracy').textContent = isNaN(accuracy) ? '-' : accuracy.toFixed(1) + '%';
+            document.getElementById('valEvents').textContent = allEvents.length;
+
+            renderStats('handStats', hands, allEvents.length);
+            renderStats('fingerStats', fingers, allEvents.length);
+            renderStats('stringStats', strings, allEvents.length, "S");
+
+            currentPage = 1;
+            renderTable();
+        }
+
+        function renderStats(id, data, total, prefix = "") {
+            const container = document.getElementById(id);
+            container.innerHTML = Object.entries(data).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+                const p = (v / total * 100).toFixed(1);
+                return `<div style="display:flex; justify-content:space-between; margin:10px 0; font-size:0.9rem;">
+                    <span style="color:var(--text-muted)">${prefix}${k.replace('_', ' ')}</span>
+                    <span><b>${v}</b> (${p}%)</span>
+                </div>`;
+            }).join('');
+        }
+
+        function renderTable() {
+            const start = (currentPage - 1) * pageSize;
+            const end = start + pageSize;
+            const events = allEvents.slice(start, end);
+
+            document.getElementById('tableBody').innerHTML = events.map(ev => `
+                <tr>
+                    <td style="font-family:monospace; opacity:0.7;">${ev.time_sec.toFixed(3)}s</td>
+                    <td>${ev.frame_index}</td>
+                    <td style="text-transform:capitalize;">${ev.hand}</td>
+                    <td style="text-transform:capitalize;">${ev.fingertip.replace('_', ' ')}</td>
+                    <td><b>S${ev.string_id}</b></td>
+                    <td><span class="${ev.onBeat ? 'on-beat' : 'off-beat'}">${ev.onBeat ? '[ON]' : 'OFF'}</span></td>
+                </tr>
+            `).join('');
+
+            document.getElementById('pageInfo').textContent = `${start + 1}-${Math.min(end, allEvents.length)} of ${allEvents.length}`;
+        }
+
+        function changePage(d) {
+            const newPage = currentPage + d;
+            if (newPage > 0 && newPage <= Math.ceil(allEvents.length / pageSize)) {
+                currentPage = newPage;
+                renderTable();
+            }
+        }
+    </script>
+</body>
+
+</html>
