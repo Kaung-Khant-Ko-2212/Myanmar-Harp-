@@ -32,18 +32,18 @@ The system is split into clear layers:
 
 ```text
 .
-├── backend/                         # FastAPI app, prediction endpoints, post-processing
-├── configs/                         # Pipeline configuration
-├── hand-detection/                  # MediaPipe / RTMPose hand detection experiments
-├── harp_pose_v11m_prepped/          # Model package location; weights are ignored
-├── myanma-saung-main/               # React + Vite + Tailwind frontend
-├── saung_strike_video_farneback_rules/
-│   ├── src/                         # Optical-flow vibration and rule engine modules
-│   └── tests/                       # Rule-engine tests
-├── scripts/                         # Offline analysis and visualization helpers
-├── src/                             # Shared audio, video, fusion, pipeline, and IO modules
-├── docker-compose.yml               # Backend/frontend local orchestration
-└── PIPELINE_DOCUMENTATION.md        # Deeper pipeline notes
+|-- backend/                         # FastAPI app, prediction endpoints, post-processing
+|-- configs/                         # Pipeline configuration
+|-- hand-detection/                  # MediaPipe / RTMPose hand detection experiments
+|-- harp_pose_v11m_prepped/          # Model package location; weights are ignored
+|-- myanma-saung-main/               # React + Vite + Tailwind frontend
+|-- saung_strike_video_farneback_rules/
+|   |-- src/                         # Optical-flow vibration and rule engine modules
+|   `-- tests/                       # Rule-engine tests
+|-- scripts/                         # Offline analysis and visualization helpers
+|-- src/                             # Shared audio, video, fusion, pipeline, and IO modules
+|-- docker-compose.yml               # Backend/frontend local orchestration
+`-- PIPELINE_DOCUMENTATION.md        # Deeper pipeline notes
 ```
 
 ## Features
@@ -127,6 +127,29 @@ The compose setup starts:
 
 - Backend API on `http://localhost:8000`
 - Frontend dev server on `http://localhost:5173`
+
+## Vercel Deployment
+
+This repository includes a root `vercel.json` so Vercel can deploy the frontend from the `myanma-saung-main` subfolder while keeping the monorepo layout intact.
+
+Recommended Vercel project settings:
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | Vite |
+| Install command | `cd myanma-saung-main && npm ci` |
+| Build command | `cd myanma-saung-main && npm run build` |
+| Output directory | `myanma-saung-main/dist` |
+
+Add this environment variable in Vercel if the analyzer should call a deployed backend:
+
+```text
+VITE_API_BASE_URL=https://your-fastapi-backend.example.com
+```
+
+The Vercel deployment is for the React frontend. The FastAPI inference backend uses OpenCV, MediaPipe, Ultralytics, model weights, and generated video artifacts, so it should be deployed separately on a Python-friendly host such as Render, Railway, Fly.io, a VPS, or a GPU/CPU server. Point `VITE_API_BASE_URL` to that backend URL.
+
+If you choose `myanma-saung-main` as the Vercel Root Directory instead of the repository root, the frontend folder also contains its own `vercel.json` with equivalent Vite SPA settings.
 
 ## Important Git Notes
 

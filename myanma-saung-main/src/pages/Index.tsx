@@ -220,7 +220,7 @@ interface PredictionDebugSummary {
   responseKeys: string[];
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000');
 
 const EVENT_ACTIVE_WINDOW_SEC = 0.2;
 const DISPLAY_FINGER_TYPES = new Set(['thumb', 'index']);

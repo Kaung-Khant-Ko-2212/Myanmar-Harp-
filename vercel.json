@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "cd myanma-saung-main && npm ci",
+  "buildCommand": "cd myanma-saung-main && npm run build",
+  "outputDirectory": "myanma-saung-main/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
