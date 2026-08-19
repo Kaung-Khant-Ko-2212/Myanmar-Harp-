@@ -100,6 +100,9 @@ def _audio_summary(a: dict[str, Any] | None, thresholds: dict[str, Any]) -> dict
             "f0_hz": None,
             "pitch_conf": None,
             "cents_error": None,
+            "note_name": None,
+            "target_frequency_hz": None,
+            "recognition_source": None,
             "raw": None,
         }
     audio_part = a.get("audio") if isinstance(a.get("audio"), dict) else {}
@@ -122,6 +125,11 @@ def _audio_summary(a: dict[str, Any] | None, thresholds: dict[str, Any]) -> dict
         "f0_hz": _float_or_none(audio_part.get("f0_hz")),
         "pitch_conf": _float_or_none(audio_part.get("pitch_conf")),
         "cents_error": _float_or_none(audio_part.get("cents_error")),
+        "note_name": (str(audio_part.get("note_name")) if audio_part.get("note_name") else None),
+        "target_frequency_hz": _float_or_none(audio_part.get("target_frequency_hz")),
+        "recognition_source": (
+            str(audio_part.get("recognition_source")) if audio_part.get("recognition_source") else None
+        ),
         "matched_string_id": _int_or_none(audio_part.get("matched_string_id")),
         "touch_frame_index": _int_or_none(touch.get("frame_index")),
         "raw": {
@@ -476,6 +484,9 @@ def fuse_audio_video_decisions(
         }
         fused_events.append(row)
         if fusion.get("status") == "strike" and fusion.get("struck_string_id") is not None:
+            fused_string_id = _int_or_none(fusion.get("struck_string_id"))
+            audio_string_id = _int_or_none(audio.get("struck_string_id"))
+            audio_note_matches_fusion = fused_string_id is not None and fused_string_id == audio_string_id
             fused_strikes.append(
                 {
                     "event_id": event_id,
@@ -483,7 +494,17 @@ def fuse_audio_video_decisions(
                     "frame_index": row["fusion"]["timing"].get("onset_frame") or touch_subset.get("frame_index"),
                     "finger_type": touch_subset.get("finger_type"),
                     "touched_string_id": touch_subset.get("touched_string_id"),
-                    "struck_string_id": _int_or_none(fusion.get("struck_string_id")),
+                    "struck_string_id": fused_string_id,
+                    "note_name": audio.get("note_name") if audio_note_matches_fusion else None,
+                    "f0_hz": audio.get("f0_hz") if audio_note_matches_fusion else None,
+                    "target_frequency_hz": (
+                        audio.get("target_frequency_hz") if audio_note_matches_fusion else None
+                    ),
+                    "pitch_conf": audio.get("pitch_conf") if audio_note_matches_fusion else None,
+                    "cents_error": audio.get("cents_error") if audio_note_matches_fusion else None,
+                    "recognition_source": (
+                        audio.get("recognition_source") if audio_note_matches_fusion else None
+                    ),
                     "peak_frame": row["fusion"]["timing"].get("peak_frame"),
                     "confidence": float(fusion.get("confidence") or 0.0),
                     "confidence_label": str(fusion.get("confidence_label") or confidence_label(0.0, thresholds)),
@@ -525,4 +546,3 @@ def fuse_audio_video_decisions(
         },
     }
     return FusionArtifacts(decision_payload=decision_payload, strike_payload=strike_payload)
-

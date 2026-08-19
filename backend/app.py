@@ -33,17 +33,13 @@ STRIKE_CONFIG_PATH = REPO_DIR / "saung_strike_video_farneback_rules" / "configs"
 PIPELINE_CONFIG_PATH = REPO_DIR / "configs" / "config.yaml"
 CACHE_SCHEMA_VERSION = 1
 CACHE_HIT_DELAY_SEC = 0.0
-FAST_MODE_STRING_INFER_EVERY_N = 4
-FAST_MODE_MAX_STRIKE_EVENTS = 80
-FAST_MODE_STRIKE_MIN_EVENT_GAP_FRAMES = 12
-FAST_MODE_HAND_PROCESS_WIDTH = 640
-FAST_MODE_HAND_MODEL_COMPLEXITY = 0
-FAST_MODE_SHAKE_PROBE_COUNT = 0
-FAST_MODE_MIN_TOUCH_CONFIDENCE = 0.30
-ACCURATE_MODE_MAX_STRIKE_EVENTS = 180
+ACCURATE_MODE_STRING_INFER_EVERY_N = 1
+ACCURATE_MODE_HAND_PROCESS_WIDTH = 0
+ACCURATE_MODE_HAND_MODEL_COMPLEXITY = 1
+ACCURATE_MODE_MAX_STRIKE_EVENTS = 500
 ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES = 6
 ACCURATE_MODE_SHAKE_PROBE_COUNT = 0
-ACCURATE_MODE_MIN_TOUCH_CONFIDENCE = 0.10
+ACCURATE_MODE_MIN_TOUCH_CONFIDENCE = 0.20
 CACHE_OUTPUT_PATH_KEYS = (
     "annotated_video_path",
     "touch_events_json_path",
@@ -363,6 +359,10 @@ def _build_touch_events_for_decision(
         if touch_conf < min_touch_conf:
             dropped_by_touch_conf += 1
             continue
+        try:
+            distance_px = float(item.get("distance_px")) if item.get("distance_px") is not None else None
+        except Exception:
+            distance_px = None
 
         event = TouchEvent(
             timestamp_sec=float(timestamp_sec),
@@ -375,6 +375,7 @@ def _build_touch_events_for_decision(
             finger_x=finger_x_val,
             finger_y=finger_y_val,
             row_index=i,
+            distance_px=distance_px,
             hand_bbox_x1=hand_bbox_x1,
             hand_bbox_y1=hand_bbox_y1,
             hand_bbox_x2=hand_bbox_x2,
@@ -407,32 +408,43 @@ def _build_touch_events_for_decision(
         last_frame_by_finger[finger_key] = frame_idx
 
     accepted_before_cap = len(accepted)
-    max_events_int = max(1, int(max_events))
+    max_events_int = int(max_events)
     sampled_down = 0
-    if accepted_before_cap > max_events_int:
-        if max_events_int == 1:
-            accepted = [accepted[-1]]
-        else:
-            step = (accepted_before_cap - 1) / float(max_events_int - 1)
-            sampled_indices: list[int] = []
-            seen_indices: set[int] = set()
-            for i in range(max_events_int):
-                idx = int(round(i * step))
-                idx = max(0, min(idx, accepted_before_cap - 1))
-                if idx in seen_indices:
-                    continue
-                seen_indices.add(idx)
-                sampled_indices.append(idx)
-            if len(sampled_indices) < max_events_int:
-                for idx in range(accepted_before_cap):
-                    if idx in seen_indices:
-                        continue
-                    sampled_indices.append(idx)
-                    seen_indices.add(idx)
-                    if len(sampled_indices) >= max_events_int:
-                        break
-            accepted = [accepted[idx] for idx in sampled_indices[:max_events_int]]
+    cap_strategy = "none"
+    if max_events_int > 0 and accepted_before_cap > max_events_int:
+        priority_slots = max(1, int(round(max_events_int * 0.75)))
+        priority_slots = min(priority_slots, max_events_int)
+        ranked_indices = sorted(
+            range(accepted_before_cap),
+            key=lambda idx: (
+                float(getattr(accepted[idx], "touch_conf", 0.0) or 0.0),
+                -int(getattr(accepted[idx], "row_index", idx)),
+            ),
+            reverse=True,
+        )
+        selected_indices: set[int] = set(ranked_indices[:priority_slots])
+        remaining_slots = max_events_int - len(selected_indices)
+        if remaining_slots > 0:
+            if remaining_slots == 1:
+                coverage_indices = [accepted_before_cap - 1]
+            else:
+                step = (accepted_before_cap - 1) / float(remaining_slots - 1)
+                coverage_indices = [
+                    max(0, min(accepted_before_cap - 1, int(round(i * step))))
+                    for i in range(remaining_slots)
+                ]
+            for idx in coverage_indices:
+                selected_indices.add(idx)
+                if len(selected_indices) >= max_events_int:
+                    break
+        if len(selected_indices) < max_events_int:
+            for idx in ranked_indices:
+                selected_indices.add(idx)
+                if len(selected_indices) >= max_events_int:
+                    break
+        accepted = [accepted[idx] for idx in sorted(selected_indices)[:max_events_int]]
         sampled_down = accepted_before_cap - len(accepted)
+        cap_strategy = "touch_confidence_priority_with_time_coverage"
 
     return accepted, {
         "raw_touch_events": len(raw_touch_events),
@@ -447,6 +459,7 @@ def _build_touch_events_for_decision(
         "min_gap_frames": int(min_gap_frames),
         "sampled_down": int(sampled_down),
         "cap_applied": bool(sampled_down > 0),
+        "cap_strategy": cap_strategy,
         "allowed_finger_types": sorted(allowed_fingers),
     }
 
@@ -571,6 +584,12 @@ def _serialize_strike_result(item: Any, include_debug: bool = False) -> dict[str
         "touched_id": int(getattr(item, "touched_id", 0)),
         "struck_id": getattr(item, "struck_id", None),
         "label": str(getattr(item, "label", "")),
+        "touch_conf": getattr(item, "touch_conf", None),
+        "distance_px": getattr(item, "distance_px", None),
+        "contact_x": getattr(item, "contact_x", None),
+        "contact_y": getattr(item, "contact_y", None),
+        "finger_x": getattr(item, "finger_x", None),
+        "finger_y": getattr(item, "finger_y", None),
         "best_metrics": best_metrics,
         "second_metrics": dict(vars(getattr(item, "second_metrics"))),
         "decision_debug": {
@@ -683,6 +702,12 @@ def _save_split_event_jsons(
                 "finger_type": str(item.get("finger_type", "")),
                 "touched_id": item.get("touched_id"),
                 "struck_id": item.get("struck_id"),
+                "touch_conf": item.get("touch_conf"),
+                "distance_px": item.get("distance_px"),
+                "contact_x": item.get("contact_x"),
+                "contact_y": item.get("contact_y"),
+                "finger_x": item.get("finger_x"),
+                "finger_y": item.get("finger_y"),
                 "label": label,
                 "decision_reason": decision_reason,
                 "candidate_score": float(best_metrics.get("candidate_score", 0.0)),
@@ -709,6 +734,12 @@ def _save_split_event_jsons(
                 "finger_type": str(item.get("finger_type", "")),
                 "touched_id": item.get("touched_id"),
                 "struck_id": struck_id,
+                "touch_conf": item.get("touch_conf"),
+                "distance_px": item.get("distance_px"),
+                "contact_x": item.get("contact_x"),
+                "contact_y": item.get("contact_y"),
+                "finger_x": item.get("finger_x"),
+                "finger_y": item.get("finger_y"),
                 "candidate_score": candidate_score,
                 "peak_z": peak_z,
                 "strike_confidence": strike_confidence,
@@ -1053,6 +1084,7 @@ def _write_debug_snapshots(
     source_video_path: Path,
     debug_dir: Path,
     rows: list[dict[str, Any]],
+    string_geometries: list[dict[str, Any]] | None = None,
     max_snapshots: int = 60,
 ) -> dict[int, str]:
     out: dict[int, str] = {}
@@ -1064,6 +1096,42 @@ def _write_debug_snapshots(
     cap = cv2.VideoCapture(str(source_video_path))
     if not cap.isOpened():
         return out
+    strings_by_id: dict[int, tuple[tuple[int, int], tuple[int, int]]] = {}
+    for geom in string_geometries or []:
+        if not isinstance(geom, dict):
+            continue
+        sid = _debug_int(geom.get("string_id"))
+        endpoints = geom.get("endpoints")
+        if sid is None or not isinstance(endpoints, list) or len(endpoints) < 2:
+            continue
+        try:
+            p1 = endpoints[0]
+            p2 = endpoints[1]
+            strings_by_id[int(sid)] = (
+                (int(round(float(p1[0]))), int(round(float(p1[1])))),
+                (int(round(float(p2[0]))), int(round(float(p2[1])))),
+            )
+        except Exception:
+            continue
+
+    def draw_string(frame: Any, sid: int | None, color: tuple[int, int, int], label: str, thickness: int = 2) -> None:
+        if sid is None:
+            return
+        endpoints = strings_by_id.get(int(sid))
+        if endpoints is None:
+            return
+        p1, p2 = endpoints
+        cv2.line(frame, p1, p2, color, thickness, cv2.LINE_AA)
+        mid = (int(round((p1[0] + p2[0]) * 0.5)), int(round((p1[1] + p2[1]) * 0.5)))
+        cv2.putText(frame, f"{label}s{sid}", (mid[0] + 4, mid[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+    def draw_point(frame: Any, x: float | None, y: float | None, color: tuple[int, int, int], label: str) -> None:
+        if x is None or y is None:
+            return
+        p = (int(round(float(x))), int(round(float(y))))
+        cv2.circle(frame, p, 7, color, 2, cv2.LINE_AA)
+        cv2.putText(frame, label, (p[0] + 8, p[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
     try:
         snapshot_dir = debug_dir / "snapshots"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -1081,13 +1149,41 @@ def _write_debug_snapshots(
             if not ok:
                 continue
             h, w = frame.shape[:2]
+            raw_debug = row.get("raw_debug") if isinstance(row.get("raw_debug"), dict) else {}
+            raw_video = raw_debug.get("video") if isinstance(raw_debug.get("video"), dict) else {}
+            decision_debug = raw_video.get("decision_debug") if isinstance(raw_video.get("decision_debug"), dict) else {}
+            ranking = decision_debug.get("candidate_ranking") if isinstance(decision_debug.get("candidate_ranking"), list) else []
+            for rank, candidate in enumerate(ranking[:3], start=1):
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_sid = _debug_int(candidate.get("candidate_string_id"))
+                draw_string(frame, candidate_sid, (190, 190, 190), f"c{rank}:", thickness=1)
+            draw_string(frame, _debug_int(row.get("touched_string_id")), (0, 215, 255), "touch:", thickness=2)
+            draw_string(frame, _debug_int(row.get("fusion_struck_string_id")), (80, 230, 80), "fused:", thickness=3)
+            draw_string(frame, _debug_int(row.get("video_struck_string_id")), (255, 160, 80), "video:", thickness=2)
+            finger_x = _debug_float(row.get("finger_x"))
+            finger_y = _debug_float(row.get("finger_y"))
+            contact_x = _debug_float(row.get("contact_x"))
+            contact_y = _debug_float(row.get("contact_y"))
+            if finger_x is not None and finger_y is not None and contact_x is not None and contact_y is not None:
+                cv2.line(
+                    frame,
+                    (int(round(finger_x)), int(round(finger_y))),
+                    (int(round(contact_x)), int(round(contact_y))),
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+            draw_point(frame, finger_x, finger_y, (255, 255, 0), "finger")
+            draw_point(frame, contact_x, contact_y, (0, 0, 255), "contact")
+
             overlay = frame.copy()
             header_h = min(h, 118)
             cv2.rectangle(overlay, (0, 0), (w, header_h), (0, 0, 0), thickness=-1)
             cv2.addWeighted(overlay, 0.62, frame, 0.38, 0.0, frame)
             lines = [
                 f"event {row_index} frame {frame_index} time {row.get('timestamp_sec')}",
-                f"finger {row.get('finger_type')} touched s{row.get('touched_string_id')} fused s{row.get('fusion_struck_string_id')}",
+                f"finger {row.get('finger_type')} touched s{row.get('touched_string_id')} fused s{row.get('fusion_struck_string_id')} conf {row.get('touch_conf')}",
                 f"video {row.get('video_status')} s{row.get('video_struck_string_id')} | audio {row.get('audio_status')} s{row.get('audio_struck_string_id')}",
                 f"fusion {row.get('fusion_status')} {row.get('fusion_confidence_label')} {row.get('fusion_strategy')}",
                 "flags: " + ", ".join(row.get("flags", [])[:5]),
@@ -1188,6 +1284,10 @@ def _write_analysis_debug_report(
                 "touched_string_id": touched_sid,
                 "touch_conf": touch_conf,
                 "distance_px": _debug_float(touch.get("distance_px")),
+                "contact_x": _debug_float(touch.get("contact_x")),
+                "contact_y": _debug_float(touch.get("contact_y")),
+                "finger_x": _debug_float(touch.get("finger_x")),
+                "finger_y": _debug_float(touch.get("finger_y")),
                 "video_status": video_status,
                 "video_struck_string_id": video_sid,
                 "video_confidence": _debug_float(video.get("confidence")),
@@ -1223,6 +1323,7 @@ def _write_analysis_debug_report(
         source_video_path=upload_path,
         debug_dir=debug_dir,
         rows=rows,
+        string_geometries=result.get("string_geometries") if isinstance(result.get("string_geometries"), list) else [],
     )
     for row in rows:
         snapshot_path = snapshot_paths.get(int(row.get("row_index", -1)))
@@ -1248,6 +1349,7 @@ def _write_analysis_debug_report(
         "flag_counts": dict(Counter(flag for row in rows for flag in row.get("flags", []))),
         "timings": pipeline_timings,
         "run_profile": run_profile,
+        "touch_detection": result.get("touch_detection"),
         "strike_touch_filter": strike_inference.get("touch_events_debug"),
         "audio_config": {
             "decision_mode": av_inference.get("audio_decision_mode"),
@@ -1300,8 +1402,6 @@ def _run_prediction_from_saved_video(
     max_strike_events: int,
     strike_min_event_gap_frames: int,
     include_strike_debug: bool,
-    string_infer_every_n: int = 1,
-    fast_mode: bool = False,
     fusion_mode: str | None = None,
     audio_enabled: bool | None = None,
     audio_decision_mode: str | None = None,
@@ -1315,20 +1415,15 @@ def _run_prediction_from_saved_video(
             detail=f"Model not found: {BEST_MODEL_PATH}",
         )
 
-    string_infer_every_n = max(1, int(string_infer_every_n))
-    if fast_mode:
-        string_infer_every_n = max(string_infer_every_n, FAST_MODE_STRING_INFER_EVERY_N)
-        max_strike_events = min(int(max_strike_events), FAST_MODE_MAX_STRIKE_EVENTS)
-        strike_min_event_gap_frames = max(int(strike_min_event_gap_frames), FAST_MODE_STRIKE_MIN_EVENT_GAP_FRAMES)
-    else:
-        max_strike_events = min(int(max_strike_events), ACCURATE_MODE_MAX_STRIKE_EVENTS)
-        strike_min_event_gap_frames = max(int(strike_min_event_gap_frames), ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES)
+    string_infer_every_n = ACCURATE_MODE_STRING_INFER_EVERY_N
+    max_strike_events = min(int(max_strike_events), ACCURATE_MODE_MAX_STRIKE_EVENTS)
+    strike_min_event_gap_frames = max(int(strike_min_event_gap_frames), ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES)
 
-    hand_process_width = FAST_MODE_HAND_PROCESS_WIDTH if fast_mode else 0
-    hand_model_complexity = FAST_MODE_HAND_MODEL_COMPLEXITY if fast_mode else 1
+    hand_process_width = ACCURATE_MODE_HAND_PROCESS_WIDTH
+    hand_model_complexity = ACCURATE_MODE_HAND_MODEL_COMPLEXITY
     print(
         "[INFO] Effective run profile: "
-        f"fast_mode={bool(fast_mode)}, "
+        "profile=accurate, "
         f"string_infer_every_n={int(string_infer_every_n)}, "
         f"max_strike_events={int(max_strike_events)}, "
         f"strike_min_event_gap_frames={int(strike_min_event_gap_frames)}, "
@@ -1438,17 +1533,12 @@ def _run_prediction_from_saved_video(
                 ),
                 default=True,
             )
-            stabilize_enabled = False
-
             fps_used = float(result.get("fps") or strike_cfg.get("fps") or 30.0)
             baseline_len = max(1, int(round(float(windows_cfg.get("baseline_sec", 0.25)) * fps_used)))
             action_len = max(1, int(round(float(windows_cfg.get("action_sec", 0.25)) * fps_used)))
             action_start_offset = int(windows_cfg.get("action_start_frame_offset", 1))
             shake_probe_count = int(global_shake_cfg.get("shake_probe_count", 6))
-            if fast_mode:
-                shake_probe_count = min(shake_probe_count, FAST_MODE_SHAKE_PROBE_COUNT)
-            else:
-                shake_probe_count = min(shake_probe_count, ACCURATE_MODE_SHAKE_PROBE_COUNT)
+            shake_probe_count = min(shake_probe_count, ACCURATE_MODE_SHAKE_PROBE_COUNT)
 
             strings_for_decision = _build_string_geometries_for_decision(result.get("string_geometries", []))
             touch_events_for_decision, touch_events_debug = _build_touch_events_for_decision(
@@ -1457,7 +1547,7 @@ def _run_prediction_from_saved_video(
                 max_events=max(1, int(max_strike_events)),
                 min_gap_frames=max(1, int(strike_min_event_gap_frames)),
                 allowed_finger_types=allowed_finger_types,
-                min_touch_confidence=FAST_MODE_MIN_TOUCH_CONFIDENCE if fast_mode else ACCURATE_MODE_MIN_TOUCH_CONFIDENCE,
+                min_touch_confidence=ACCURATE_MODE_MIN_TOUCH_CONFIDENCE,
             )
             velocity_stats_by_event = _build_event_velocity_stats_by_event(touch_events_for_decision, fps=fps_used)
 
@@ -1481,7 +1571,9 @@ def _run_prediction_from_saved_video(
             print(
                 "[INFO] Strike inference started: "
                 f"events={len(touch_events_for_decision)}, "
-                f"strings={len(strings_for_decision)}"
+                f"strings={len(strings_for_decision)}, "
+                f"shake_probe_count={shake_probe_count}, "
+                f"stabilize={bool(stabilize_enabled)}"
             )
 
             if strings_for_decision and touch_events_for_decision:
@@ -1649,6 +1741,11 @@ def _run_prediction_from_saved_video(
     right_av_alternating_slots_payload = _load_json_payload_optional(
         av_inference.get("right_av_alternating_on_off_slots_json_path")
     )
+    recognized_notes = [
+        str(event.get("note_name"))
+        for event in _events_from_payload(right_audio_strike_payload)
+        if event.get("note_name")
+    ]
     final_annotated_video_path = av_inference.get("annotated_video_path") or str(out_video_path)
     final_video_path = Path(str(final_annotated_video_path))
 
@@ -1707,10 +1804,11 @@ def _run_prediction_from_saved_video(
     }
 
     run_profile = {
-        "fast_mode": bool(fast_mode),
+        "profile": "accurate",
         "string_infer_every_n": int(string_infer_every_n),
         "max_strike_events": int(max_strike_events),
         "strike_min_event_gap_frames": int(strike_min_event_gap_frames),
+        "min_touch_confidence": float(ACCURATE_MODE_MIN_TOUCH_CONFIDENCE),
         "audio_decision_mode": audio_decision_mode,
         "debug_report_enabled": bool(enable_debug_report),
     }
@@ -1736,7 +1834,7 @@ def _run_prediction_from_saved_video(
     return {
         "predicted_video_url": predicted_video_url,
         "annotated_video_path": final_annotated_video_path,
-        "ksy_notes": [],
+        "ksy_notes": recognized_notes,
         "frames_processed": int(result.get("frames_processed", 0)),
         "video_codec": result.get("writer_codec"),
         "final_codec": final_codec,
@@ -1751,6 +1849,7 @@ def _run_prediction_from_saved_video(
         "hand_fingertips_drawn": int(result.get("hand_fingertips_drawn", 0)),
         "touch_events_count": int(result.get("touch_events_count", 0)),
         "touch_events": result.get("touch_events", []),
+        "touch_detection": result.get("touch_detection"),
         "touch_events_json_path": result.get("touch_events_json_path"),
         "strike_results_count": len(strike_results),
         "strike_results": strike_results,
@@ -1798,8 +1897,6 @@ def health() -> dict[str, str]:
 def _prediction_request_options(
     *,
     expected_strings: int,
-    string_infer_every_n: int,
-    fast_mode: bool,
     enable_hand_tracking: bool,
     draw_hand_labels: bool,
     hand_pipeline_enabled: bool | None,
@@ -1815,8 +1912,8 @@ def _prediction_request_options(
 ) -> dict[str, Any]:
     return {
         "expected_strings": int(expected_strings),
-        "string_infer_every_n": int(string_infer_every_n),
-        "fast_mode": bool(fast_mode),
+        "profile": "accurate",
+        "string_infer_every_n": ACCURATE_MODE_STRING_INFER_EVERY_N,
         "enable_hand_tracking": bool(enable_hand_tracking),
         "draw_hand_labels": bool(draw_hand_labels),
         "hand_pipeline_enabled": hand_pipeline_enabled,
@@ -1857,8 +1954,6 @@ def _prediction_job_worker(
     cache_key: str,
     cache_metadata: dict[str, Any],
     expected_strings: int,
-    string_infer_every_n: int,
-    fast_mode: bool,
     enable_hand_tracking: bool,
     draw_hand_labels: bool,
     hand_pipeline_enabled: bool | None,
@@ -1878,8 +1973,6 @@ def _prediction_job_worker(
             base_url=base_url,
             upload_path=upload_path,
             expected_strings=expected_strings,
-            string_infer_every_n=string_infer_every_n,
-            fast_mode=fast_mode,
             enable_hand_tracking=enable_hand_tracking,
             draw_hand_labels=draw_hand_labels,
             hand_pipeline_enabled=hand_pipeline_enabled,
@@ -1931,8 +2024,6 @@ def get_prediction_job(job_id: str) -> dict[str, Any]:
 async def start_predict_video_job(
     request: Request,
     expected_strings: int = 16,
-    string_infer_every_n: int = 1,
-    fast_mode: bool = False,
     enable_hand_tracking: bool = True,
     draw_hand_labels: bool = False,
     hand_pipeline_enabled: bool | None = None,
@@ -1961,8 +2052,6 @@ async def start_predict_video_job(
     base_url = str(request.base_url).rstrip("/")
     request_options = _prediction_request_options(
         expected_strings=expected_strings,
-        string_infer_every_n=string_infer_every_n,
-        fast_mode=fast_mode,
         enable_hand_tracking=enable_hand_tracking,
         draw_hand_labels=draw_hand_labels,
         hand_pipeline_enabled=hand_pipeline_enabled,
@@ -2027,8 +2116,6 @@ async def start_predict_video_job(
             "cache_key": cache_key,
             "cache_metadata": cache_metadata,
             "expected_strings": expected_strings,
-            "string_infer_every_n": string_infer_every_n,
-            "fast_mode": fast_mode,
             "enable_hand_tracking": enable_hand_tracking,
             "draw_hand_labels": draw_hand_labels,
             "hand_pipeline_enabled": hand_pipeline_enabled,
@@ -2051,8 +2138,6 @@ async def start_predict_video_job(
 async def predict_video(
     request: Request,
     expected_strings: int = 16,
-    string_infer_every_n: int = 1,
-    fast_mode: bool = False,
     enable_hand_tracking: bool = True,
     draw_hand_labels: bool = False,
     hand_pipeline_enabled: bool | None = None,
@@ -2087,8 +2172,8 @@ async def predict_video(
     base_url = str(request.base_url).rstrip("/")
     request_options = {
         "expected_strings": int(expected_strings),
-        "string_infer_every_n": int(string_infer_every_n),
-        "fast_mode": bool(fast_mode),
+        "profile": "accurate",
+        "string_infer_every_n": ACCURATE_MODE_STRING_INFER_EVERY_N,
         "enable_hand_tracking": bool(enable_hand_tracking),
         "draw_hand_labels": bool(draw_hand_labels),
         "hand_pipeline_enabled": hand_pipeline_enabled,
@@ -2121,8 +2206,6 @@ async def predict_video(
         base_url=base_url,
         upload_path=upload_path,
         expected_strings=expected_strings,
-        string_infer_every_n=string_infer_every_n,
-        fast_mode=fast_mode,
         enable_hand_tracking=enable_hand_tracking,
         draw_hand_labels=draw_hand_labels,
         hand_pipeline_enabled=hand_pipeline_enabled,
@@ -2240,16 +2323,12 @@ async def predict_video(
                 ),
                 default=True,
             )
-            if fast_mode:
-                stabilize_enabled = False
-
             fps_used = float(result.get("fps") or strike_cfg.get("fps") or 30.0)
             baseline_len = max(1, int(round(float(windows_cfg.get("baseline_sec", 0.25)) * fps_used)))
             action_len = max(1, int(round(float(windows_cfg.get("action_sec", 0.25)) * fps_used)))
             action_start_offset = int(windows_cfg.get("action_start_frame_offset", 1))
             shake_probe_count = int(global_shake_cfg.get("shake_probe_count", 6))
-            if fast_mode:
-                shake_probe_count = min(shake_probe_count, FAST_MODE_SHAKE_PROBE_COUNT)
+            shake_probe_count = min(shake_probe_count, ACCURATE_MODE_SHAKE_PROBE_COUNT)
 
             strings_for_decision = _build_string_geometries_for_decision(result.get("string_geometries", []))
             touch_events_for_decision, touch_events_debug = _build_touch_events_for_decision(
@@ -2258,7 +2337,7 @@ async def predict_video(
                 max_events=max(1, int(max_strike_events)),
                 min_gap_frames=max(1, int(strike_min_event_gap_frames)),
                 allowed_finger_types=allowed_finger_types,
-                min_touch_confidence=FAST_MODE_MIN_TOUCH_CONFIDENCE if fast_mode else 0.0,
+                min_touch_confidence=ACCURATE_MODE_MIN_TOUCH_CONFIDENCE,
             )
             velocity_stats_by_event = _build_event_velocity_stats_by_event(touch_events_for_decision, fps=fps_used)
 
@@ -2279,7 +2358,9 @@ async def predict_video(
             print(
                 "[INFO] Strike inference started: "
                 f"events={len(touch_events_for_decision)}, "
-                f"strings={len(strings_for_decision)}"
+                f"strings={len(strings_for_decision)}, "
+                f"shake_probe_count={shake_probe_count}, "
+                f"stabilize={bool(stabilize_enabled)}"
             )
 
             if strings_for_decision and touch_events_for_decision:
@@ -2409,6 +2490,7 @@ async def predict_video(
         "hand_fingertips_drawn": int(result.get("hand_fingertips_drawn", 0)),
         "touch_events_count": int(result.get("touch_events_count", 0)),
         "touch_events": result.get("touch_events", []),
+        "touch_detection": result.get("touch_detection"),
         "touch_events_json_path": result.get("touch_events_json_path"),
         "strike_results_count": len(strike_results),
         "strike_results": strike_results,
@@ -2488,8 +2570,6 @@ async def predict_multipart(
         raise HTTPException(status_code=400, detail="Missing multipart file field `video_file` (also accepts `video` or `file`).")
 
     expected_strings = _get_int("expected_strings", 16)
-    string_infer_every_n = _get_int("string_infer_every_n", 1)
-    fast_mode = _coerce_bool(form.get("fast_mode", False), default=False)
     enable_hand_tracking = _coerce_bool(form.get("enable_hand_tracking", True), default=True)
     draw_hand_labels = _coerce_bool(form.get("draw_hand_labels", False), default=False)
     hand_pipeline_enabled = _get_opt_bool("hand_pipeline_enabled")
@@ -2522,8 +2602,8 @@ async def predict_multipart(
     base_url = str(request.base_url).rstrip("/")
     request_options = {
         "expected_strings": int(expected_strings),
-        "string_infer_every_n": int(string_infer_every_n),
-        "fast_mode": bool(fast_mode),
+        "profile": "accurate",
+        "string_infer_every_n": ACCURATE_MODE_STRING_INFER_EVERY_N,
         "enable_hand_tracking": bool(enable_hand_tracking),
         "draw_hand_labels": bool(draw_hand_labels),
         "hand_pipeline_enabled": hand_pipeline_enabled,
@@ -2561,8 +2641,6 @@ async def predict_multipart(
         base_url=base_url,
         upload_path=upload_path,
         expected_strings=int(expected_strings),
-        string_infer_every_n=int(string_infer_every_n),
-        fast_mode=bool(fast_mode),
         enable_hand_tracking=bool(enable_hand_tracking),
         draw_hand_labels=bool(draw_hand_labels),
         hand_pipeline_enabled=hand_pipeline_enabled,

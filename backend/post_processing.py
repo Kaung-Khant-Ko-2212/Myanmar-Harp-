@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections import deque
 from queue import Empty, Full, Queue
 from threading import Thread
 import json
@@ -65,6 +66,30 @@ def _env_bool(name: str, default: bool) -> bool:
     return bool(default)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        value = int(default)
+    else:
+        try:
+            value = int(raw)
+        except Exception:
+            value = int(default)
+    if min_value is not None:
+        value = max(int(min_value), value)
+    return value
+
+
 def _resolve_yolo_runtime() -> dict[str, object]:
     requested_device = DEFAULT_YOLO_DEVICE
     cuda_available = False
@@ -103,6 +128,9 @@ def _resolve_yolo_runtime() -> dict[str, object]:
     half = _env_bool("YOLO_HALF", uses_cuda)
     if not uses_cuda:
         half = False
+    batch_size = _env_int("YOLO_BATCH_SIZE", 4 if uses_cuda else 1, min_value=1)
+    if not uses_cuda:
+        batch_size = 1
 
     return {
         "requested_device": requested_device,
@@ -110,6 +138,7 @@ def _resolve_yolo_runtime() -> dict[str, object]:
         "half": bool(half),
         "cuda_available": bool(cuda_available),
         "gpu_name": gpu_name,
+        "batch_size": int(batch_size),
     }
 
 
@@ -142,6 +171,7 @@ def _log_yolo_runtime(runtime: dict[str, object]) -> None:
         "[INFO] YOLO runtime: "
         f"device={runtime.get('device')}, "
         f"half={runtime.get('half')}, "
+        f"batch_size={runtime.get('batch_size')}, "
         f"cuda_available={runtime.get('cuda_available')}"
         f"{gpu_suffix}"
     )
@@ -186,6 +216,12 @@ HARP_HAND_SPLIT_OVERLAP_RATIO = 0.12
 RIGHT_HAND_TOUCH_TIPS = {"thumb_tip", "index_tip"}
 LEFT_HAND_TOUCH_TIPS = {"thumb_tip"}
 TOUCH_DISTANCE_RATIO = 0.01
+TOUCH_ENTER_CONFIDENCE = _env_float("TOUCH_ENTER_CONFIDENCE", 0.20)
+TOUCH_ACTIVE_EXIT_CONFIDENCE = _env_float("TOUCH_ACTIVE_EXIT_CONFIDENCE", 0.05)
+TOUCH_HIGH_CONFIDENCE = _env_float("TOUCH_HIGH_CONFIDENCE", 0.70)
+TOUCH_STABLE_FRAMES = _env_int("TOUCH_STABLE_FRAMES", 2, min_value=1)
+TOUCH_EXIT_MISS_FRAMES = _env_int("TOUCH_EXIT_MISS_FRAMES", 2, min_value=1)
+TOUCH_RESOLVE_WINDOW_FRAMES = _env_int("TOUCH_RESOLVE_WINDOW_FRAMES", 3, min_value=1)
 
 
 # ---------------------------
@@ -1129,6 +1165,14 @@ def save_touch_events_json(
         "fps": float(fps),
         "frames_processed": int(frames_processed),
         "touch_events_count": int(len(touch_events)),
+        "touch_detection": {
+            "enter_confidence": float(TOUCH_ENTER_CONFIDENCE),
+            "active_exit_confidence": float(TOUCH_ACTIVE_EXIT_CONFIDENCE),
+            "high_confidence_fast_path": float(TOUCH_HIGH_CONFIDENCE),
+            "stable_frames": int(TOUCH_STABLE_FRAMES),
+            "exit_miss_frames": int(TOUCH_EXIT_MISS_FRAMES),
+            "resolve_window_frames": int(TOUCH_RESOLVE_WINDOW_FRAMES),
+        },
         "touch_events": touch_events,
     }
 
@@ -1674,7 +1718,7 @@ def run_video_predict(
     hand_fingertips_drawn = 0
     touch_events: list[dict] = []
     string_endpoint_samples: dict[int, list[tuple[float, float, float, float]]] = {}
-    active_touches_by_fingertip: dict[tuple[str, str], int | None] = {}
+    touch_states_by_fingertip: dict[tuple[str, str], dict] = {}
     touch_distance_px = max(6.0, min(w, h) * TOUCH_DISTANCE_RATIO)
     print(f"[INFO] Running prediction on video -> {video_path}")
     if string_infer_every_n > 1:
@@ -1775,46 +1819,143 @@ def run_video_predict(
             max_touch_distance_px=touch_distance_px,
         )
 
-        current_touch_map = {key: int(value["string_id"]) for key, value in touches.items()}
-        all_keys = set(active_touches_by_fingertip.keys()) | set(current_touch_map.keys())
-        timestamp_sec = round(frame_index / max(fps, 1e-6), 3)
+        def touch_confidence(touch: dict | None) -> float:
+            if touch is None:
+                return 0.0
+            distance = float(touch.get("distance_px", touch_distance_px))
+            return max(0.0, min(1.0, 1.0 - (distance / max(touch_distance_px, 1e-6))))
+
+        def normalized_touch(touch: dict, touch_conf: float) -> dict:
+            out = dict(touch)
+            out["touch_conf"] = float(touch_conf)
+            out["frame_index"] = int(frame_index)
+            out["timestamp_sec"] = round(frame_index / max(fps, 1e-6), 3)
+            return out
+
+        def resolve_recent_touch(state: dict, fallback: dict) -> dict:
+            recent = state.get("recent_touches")
+            if not isinstance(recent, deque) or len(recent) == 0:
+                return fallback
+            score_by_sid: dict[int, dict] = {}
+            for touch in recent:
+                try:
+                    sid = int(touch.get("string_id"))
+                    conf = float(touch.get("touch_conf", 0.0))
+                except Exception:
+                    continue
+                row = score_by_sid.setdefault(sid, {"count": 0, "best_conf": -1.0, "best_touch": touch})
+                row["count"] = int(row["count"]) + 1
+                if conf > float(row["best_conf"]):
+                    row["best_conf"] = conf
+                    row["best_touch"] = touch
+            if not score_by_sid:
+                return fallback
+            _, best = max(
+                score_by_sid.items(),
+                key=lambda item: (int(item[1]["count"]), float(item[1]["best_conf"]), -int(item[0])),
+            )
+            return dict(best["best_touch"])
+
+        all_keys = set(touch_states_by_fingertip.keys()) | set(touches.keys())
 
         for key in all_keys:
-            prev_sid = active_touches_by_fingertip.get(key)
-            cur_touch = touches.get(key)
-            cur_sid = current_touch_map.get(key)
-            if prev_sid == cur_sid:
+            state = touch_states_by_fingertip.setdefault(
+                key,
+                {
+                    "active_sid": None,
+                    "candidate_sid": None,
+                    "candidate_count": 0,
+                    "candidate_frame_index": None,
+                    "miss_count": 0,
+                    "recent_touches": deque(maxlen=TOUCH_RESOLVE_WINDOW_FRAMES),
+                },
+            )
+
+            cur_touch_raw = touches.get(key)
+            cur_sid = None
+            cur_touch = None
+            cur_conf = touch_confidence(cur_touch_raw)
+            if cur_touch_raw is not None:
+                raw_sid = int(cur_touch_raw["string_id"])
+                active_sid = state.get("active_sid")
+                enter_threshold = TOUCH_ACTIVE_EXIT_CONFIDENCE if active_sid == raw_sid else TOUCH_ENTER_CONFIDENCE
+                if cur_conf >= enter_threshold:
+                    cur_sid = raw_sid
+                    cur_touch = normalized_touch(cur_touch_raw, cur_conf)
+                    recent = state.get("recent_touches")
+                    if isinstance(recent, deque):
+                        recent.append(cur_touch)
+
+            if cur_sid is None:
+                state["candidate_sid"] = None
+                state["candidate_count"] = 0
+                state["candidate_frame_index"] = None
+                state["miss_count"] = int(state.get("miss_count", 0)) + 1
+                if state.get("active_sid") is not None and int(state["miss_count"]) >= TOUCH_EXIT_MISS_FRAMES:
+                    state["active_sid"] = None
+                if state.get("active_sid") is None and int(state["miss_count"]) > TOUCH_EXIT_MISS_FRAMES:
+                    touch_states_by_fingertip.pop(key, None)
                 continue
 
-            active_touches_by_fingertip[key] = cur_sid
-            if cur_sid is None:
+            state["miss_count"] = 0
+            if state.get("active_sid") == cur_sid:
                 continue
+
+            if state.get("candidate_sid") == cur_sid:
+                state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
+            else:
+                state["candidate_sid"] = cur_sid
+                state["candidate_count"] = 1
+                state["candidate_frame_index"] = int(frame_index)
+
+            if int(state["candidate_count"]) < TOUCH_STABLE_FRAMES and cur_conf < TOUCH_HIGH_CONFIDENCE:
+                continue
+
+            resolved_touch = resolve_recent_touch(state, cur_touch or cur_touch_raw or {})
+            resolved_sid = int(resolved_touch.get("string_id", cur_sid))
+            if state.get("active_sid") == resolved_sid:
+                continue
+
+            stable_count = int(state.get("candidate_count", 0))
+            state["active_sid"] = resolved_sid
+            state["candidate_sid"] = None
+            state["candidate_count"] = 0
+            event_frame_index = int(state.get("candidate_frame_index") or frame_index)
+            timestamp_sec = round(event_frame_index / max(fps, 1e-6), 3)
 
             hand_label, tip_name = key
             finger_type = tip_name.replace("_tip", "") if tip_name.endswith("_tip") else tip_name
-            touch_distance = float(cur_touch.get("distance_px", touch_distance_px)) if cur_touch is not None else touch_distance_px
-            touch_conf = max(0.0, 1.0 - (touch_distance / max(touch_distance_px, 1e-6)))
-            finger_point = cur_touch.get("finger_point", (0.0, 0.0)) if cur_touch is not None else (0.0, 0.0)
-            contact_point = cur_touch.get("contact_point", finger_point) if cur_touch is not None else finger_point
+            touch_distance = float(resolved_touch.get("distance_px", touch_distance_px))
+            touch_conf = float(resolved_touch.get("touch_conf", touch_confidence(resolved_touch)))
+            finger_point = resolved_touch.get("finger_point", (0.0, 0.0))
+            contact_point = resolved_touch.get("contact_point", finger_point)
             touch_events.append(
                 {
                     "time_sec": timestamp_sec,
                     "timestamp_sec": timestamp_sec,
-                    "frame_index": int(frame_index),
+                    "frame_index": int(event_frame_index),
                     "hand": hand_label,
                     "hand_side": hand_label,
                     "fingertip": tip_name,
                     "finger_type": finger_type,
-                    "string_id": int(cur_sid),
-                    "touched_string_id": int(cur_sid),
+                    "string_id": int(resolved_sid),
+                    "touched_string_id": int(resolved_sid),
                     "distance_px": touch_distance,
                     "touch_conf": float(touch_conf),
                     "contact_x": float(contact_point[0]),
                     "contact_y": float(contact_point[1]),
                     "finger_x": float(finger_point[0]),
                     "finger_y": float(finger_point[1]),
+                    "touch_smoothing": {
+                        "stable_frames_required": int(TOUCH_STABLE_FRAMES),
+                        "candidate_count": stable_count,
+                        "resolve_window_frames": int(TOUCH_RESOLVE_WINDOW_FRAMES),
+                        "enter_confidence": float(TOUCH_ENTER_CONFIDENCE),
+                        "high_confidence_fast_path": float(TOUCH_HIGH_CONFIDENCE),
+                    },
                 }
             )
+            state["candidate_frame_index"] = None
 
     def flush_ready_frames() -> None:
         nonlocal next_output_idx
@@ -1869,18 +2010,74 @@ def run_video_predict(
                 break
 
     loop_started_at = time.perf_counter()
+
+    def iter_video_frames_with_batched_yolo():
+        batch_size = int(yolo_runtime.get("batch_size", 1) or 1)
+        batching_enabled = batch_size > 1 and string_infer_every_n == 1
+        if batching_enabled:
+            print(f"[INFO] CUDA frame batching enabled: batch_size={batch_size}.")
+
+        while True:
+            if not batching_enabled:
+                ok, single_frame = cap.read()
+                if not ok:
+                    return
+                yield single_frame, None
+                continue
+
+            frames: list[np.ndarray] = []
+            for _ in range(batch_size):
+                ok, batch_frame = cap.read()
+                if not ok:
+                    break
+                frames.append(batch_frame)
+            if not frames:
+                return
+
+            try:
+                batch_results = model.predict(source=frames, **yolo_kwargs)
+                if len(batch_results) != len(frames):
+                    raise RuntimeError(
+                        f"YOLO batch returned {len(batch_results)} results for {len(frames)} frames"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    "[WARN] CUDA frame batching failed; falling back to single-frame inference: "
+                    f"{exc}"
+                )
+                batching_enabled = False
+                yolo_runtime["batch_size"] = 1
+                for batch_frame in frames:
+                    yield batch_frame, None
+                continue
+
+            for batch_frame, batch_result in zip(frames, batch_results):
+                yield batch_frame, batch_result
+
     try:
-        while not stop_requested:
-            ret, frame = cap.read()
-            if not ret:
+        for frame, precomputed_yolo_result in iter_video_frames_with_batched_yolo():
+            if stop_requested:
                 break
 
             run_string_inference = (
+                precomputed_yolo_result is not None
+                or
                 last_yolo_result is None
                 or (input_frame_idx % string_infer_every_n == 0)
             )
 
-            if run_string_inference:
+            if precomputed_yolo_result is not None:
+                r = precomputed_yolo_result
+                last_yolo_result = r
+                last_harp_roi = extract_harp_roi_from_result(r)
+                last_frame_strings = extract_corrected_strings(
+                    r,
+                    kpt_conf_thres=KPT_CONF_THRES,
+                    expected_strings=expected_strings,
+                )
+                collect_string_geometry_samples(last_frame_strings)
+                string_inference_frames += 1
+            elif run_string_inference:
                 results = model.predict(
                     source=frame,
                     **yolo_kwargs,
@@ -2143,6 +2340,15 @@ def run_video_predict(
         "touch_events_count": len(touch_events),
         "touch_events": touch_events,
         "touch_events_json_path": str(touch_events_json_path),
+        "touch_detection": {
+            "distance_px": float(touch_distance_px),
+            "enter_confidence": float(TOUCH_ENTER_CONFIDENCE),
+            "active_exit_confidence": float(TOUCH_ACTIVE_EXIT_CONFIDENCE),
+            "high_confidence_fast_path": float(TOUCH_HIGH_CONFIDENCE),
+            "stable_frames": int(TOUCH_STABLE_FRAMES),
+            "exit_miss_frames": int(TOUCH_EXIT_MISS_FRAMES),
+            "resolve_window_frames": int(TOUCH_RESOLVE_WINDOW_FRAMES),
+        },
         "string_geometries": string_geometries,
         "strings_by_frame_jsonl_path": str(strings_by_frame_path) if strings_by_frame_path is not None else None,
         "processing_elapsed_sec": float(processing_elapsed_sec),

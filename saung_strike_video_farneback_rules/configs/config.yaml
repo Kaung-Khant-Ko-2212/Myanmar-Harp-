@@ -5,20 +5,20 @@ windows:
   action_sec: 0.20
   action_start_frame_offset: 1
   baseline_gap_frames: 0
-  dynamic_action_enabled: false
+  dynamic_action_enabled: true
   dynamic_offsets: [-2, -1, 0, 1, 2, 3, 4, 5, 6]
   dynamic_select_metric: "max_impulse"
 
 candidates:
-  candidate_radius_default: 1
-  candidate_radius_close_contact: 0
+  candidate_radius_default: 2
+  candidate_radius_close_contact: 1
   contact_dist_px_thr: 8
-  geometry_enabled: false
+  geometry_enabled: true
   geometry_top_k: 5
   geometry_max_distance_px: 35.0
   always_include_touched_id: true
   include_id_radius_fallback: true
-  missing_touched_id_fallback: "none"
+  missing_touched_id_fallback: "nearest_geometry"
   fallback_top_k: 3
   fallback_max_distance_px: 40.0
   log_string_id_inconsistency: true
@@ -29,7 +29,7 @@ ROI:
   roi_thickness_px: 10
   trim_ends_ratio: 0.15
   center_band_h: 10
-  adaptive_enabled: false
+  adaptive_enabled: true
   adaptive_height_ratio: 0.45
   min_roi_h: 5
   max_roi_h: 18
@@ -59,12 +59,12 @@ rules:
   thr_duration_frames: 2
   thr_impulse: 9.0
   thr_domination_ratio: 1.7
-  normalization_mode: "zscore"
+  normalization_mode: "robust_mad"
   min_scale: 0.05
   mad_scale_factor: 1.4826
   percentile_low: 25
   percentile_high: 75
-  require_absolute_motion: false
+  require_absolute_motion: true
   min_action_mean: 0.02
   min_action_max: 0.05
   max_baseline_mean: null
@@ -93,7 +93,7 @@ masking:
   mask_contact_region: true
 
 frame_transitions:
-  allow_small_gaps: false
+  allow_small_gaps: true
   max_gap_frames: 2
   normalize_by_gap: true
 
@@ -103,4 +103,4 @@ decision:
     - index
 
 stabilization:
-  enabled: true
+  enabled: false

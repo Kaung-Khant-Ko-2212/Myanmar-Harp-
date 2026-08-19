@@ -57,6 +57,18 @@ def _is_right_hand(item: dict[str, Any]) -> bool:
     return str(item.get("hand_side") or item.get("hand") or "").strip().lower() == "right"
 
 
+def _cv_vibrated_string_id(video_decision: dict[str, Any]) -> int | None:
+    label = str(video_decision.get("label") or "").strip().lower()
+    best_metrics = (
+        video_decision.get("best_metrics")
+        if isinstance(video_decision.get("best_metrics"), dict)
+        else {}
+    )
+    if label != "strike" and not bool(best_metrics.get("vibrates", False)):
+        return None
+    return _int_or_none(video_decision.get("struck_id"))
+
+
 def _normalize_touch_subset(item: dict[str, Any], fps: float) -> dict[str, Any]:
     ts = _touch_time_sec(item)
     return {
@@ -71,6 +83,7 @@ def _normalize_touch_subset(item: dict[str, Any], fps: float) -> dict[str, Any]:
         "finger_x": _float_or_none(item.get("finger_x")),
         "finger_y": _float_or_none(item.get("finger_y")),
         "distance_px": _float_or_none(item.get("distance_px")),
+        "cv_vibrated_string_id": _int_or_none(item.get("cv_vibrated_string_id")),
     }
 
 
@@ -122,7 +135,14 @@ def _synthesize_touch_from_video_decision(vd: dict[str, Any], fps: float) -> dic
         "hand_side": "right",
         "finger_type": str(vd.get("finger_type") or ""),
         "touched_string_id": _int_or_none(vd.get("touched_id")),
-        "touch_conf": None,
+        "touch_conf": _float_or_none(vd.get("touch_conf")),
+        "distance_px": _float_or_none(vd.get("distance_px")),
+        "contact_x": _float_or_none(vd.get("contact_x")),
+        "contact_y": _float_or_none(vd.get("contact_y")),
+        "finger_x": _float_or_none(vd.get("finger_x")),
+        "finger_y": _float_or_none(vd.get("finger_y")),
+        "cv_vibrated_string_id": _cv_vibrated_string_id(vd),
+        "cv_vibration_label": str(vd.get("label") or ""),
     }
 
 
@@ -165,7 +185,10 @@ def _align_touches_to_video_decisions(
             aligned.append(_synthesize_touch_from_video_decision(vd, fps))
         else:
             used.add(best_i)
-            aligned.append(dict(right_touches[best_i]))
+            aligned_event = dict(right_touches[best_i])
+            aligned_event["cv_vibrated_string_id"] = _cv_vibrated_string_id(vd)
+            aligned_event["cv_vibration_label"] = str(vd.get("label") or "")
+            aligned.append(aligned_event)
     aligned.sort(
         key=lambda ev: (
             _touch_frame_index(ev, fps) if _touch_frame_index(ev, fps) is not None else 10**9,
@@ -259,6 +282,9 @@ def _audio_reject_event(
             "pitch_conf": pitch_conf,
             "matched_string_id": None,
             "cents_error": cents_error,
+            "note_name": None,
+            "target_frequency_hz": None,
+            "recognition_source": "unmatched",
             "candidate_strings": candidate_strings or [],
             "debug": debug or {},
         },
@@ -287,6 +313,9 @@ def _audio_strike_event(
     candidate_strings: list[int],
     debug: dict[str, Any],
     confidence: float,
+    note_name: str | None = None,
+    target_frequency_hz: float | None = None,
+    recognition_source: str = "onset_only",
 ) -> dict[str, Any]:
     return {
         "event_id": str(ev.get("event_id")),
@@ -302,6 +331,11 @@ def _audio_strike_event(
             "pitch_conf": (float(pitch_conf) if pitch_conf is not None else None),
             "matched_string_id": int(matched_string_id),
             "cents_error": (float(cents_error) if cents_error is not None else None),
+            "note_name": (str(note_name) if note_name else None),
+            "target_frequency_hz": (
+                float(target_frequency_hz) if target_frequency_hz is not None else None
+            ),
+            "recognition_source": str(recognition_source),
             "candidate_strings": [int(s) for s in candidate_strings],
             "debug": debug,
         },
@@ -333,6 +367,9 @@ def _audio_strike_summary_row(event: dict[str, Any], fps: float) -> dict[str, An
         "f0_hz": _float_or_none(audio.get("f0_hz")),
         "pitch_conf": _float_or_none(audio.get("pitch_conf")),
         "cents_error": _float_or_none(audio.get("cents_error")),
+        "note_name": (str(audio.get("note_name")) if audio.get("note_name") else None),
+        "target_frequency_hz": _float_or_none(audio.get("target_frequency_hz")),
+        "recognition_source": str(audio.get("recognition_source") or ""),
         "confidence": float(event["decision"].get("confidence") or 0.0),
         "confidence_label": str(event["decision"].get("confidence_label") or ""),
     }
@@ -358,17 +395,22 @@ def run_audio_decision_for_right_events(
     decision_mode = str(audio_cfg.get("decision_mode", "onset_only")).strip().lower()
     use_pitch_tuning_match = decision_mode in {"onset_pitch_match", "pitch_match", "pitch", "pitch_tuning"}
     pitch_fallback_to_onset = bool(audio_cfg.get("pitch_fallback_to_onset", False))
+    require_cv_vibration = bool(audio_cfg.get("require_cv_vibration_for_audio_strike", True))
     tuning_load_error: str | None = None
-    if use_pitch_tuning_match and tuning_by_string is None:
+    # Load the tuning table for every audio mode.  Pitch matching needs it to
+    # choose a string, while onset-only/fallback strikes need it to turn the
+    # resolved string into a musical note.
+    if tuning_by_string is None:
         tuning_path = Path(str(audio_cfg.get("tuning_table_path", "configs/saung_tuning.json")))
         try:
             tuning_by_string = load_tuning_table(tuning_path)
         except Exception as exc:  # noqa: BLE001
             tuning_by_string = {}
             tuning_load_error = str(exc)
-            # Degrade gracefully to onset-only if tuning is not available.
-            use_pitch_tuning_match = False
-            decision_mode = "onset_only"
+            if use_pitch_tuning_match:
+                # Degrade gracefully to onset-only if tuning is not available.
+                use_pitch_tuning_match = False
+                decision_mode = "onset_only"
     if tuning_by_string is None:
         tuning_by_string = {}
 
@@ -432,15 +474,25 @@ def run_audio_decision_for_right_events(
 
             distance_px = _float_or_none(ev.get("distance_px"))
             touched_sid = _int_or_none(ev.get("touched_string_id", ev.get("string_id")))
-            available_string_ids = list(tuning_by_string.keys()) if tuning_by_string else ([int(touched_sid)] if touched_sid is not None else [])
-            candidate_strings = select_candidate_string_ids(
-                touched_string_id=touched_sid,
-                available_string_ids=available_string_ids,
-                distance_px=distance_px,
-                candidate_radius_default=int(audio_cfg.get("candidate_radius_default", 2)),
-                candidate_radius_close_contact=int(audio_cfg.get("candidate_radius_close_contact", 1)),
-                contact_dist_px_thr=float(audio_cfg.get("contact_dist_px_thr", 8)),
-            )
+            cv_vibrated_sid = _int_or_none(ev.get("cv_vibrated_string_id"))
+            resolved_sid = cv_vibrated_sid if cv_vibrated_sid is not None else touched_sid
+            resolved_tuning = tuning_by_string.get(int(resolved_sid)) if resolved_sid is not None else None
+            if cv_vibrated_sid is not None:
+                candidate_strings = [int(cv_vibrated_sid)]
+            else:
+                available_string_ids = (
+                    list(tuning_by_string.keys())
+                    if tuning_by_string
+                    else ([int(touched_sid)] if touched_sid is not None else [])
+                )
+                candidate_strings = select_candidate_string_ids(
+                    touched_string_id=touched_sid,
+                    available_string_ids=available_string_ids,
+                    distance_px=distance_px,
+                    candidate_radius_default=int(audio_cfg.get("candidate_radius_default", 2)),
+                    candidate_radius_close_contact=int(audio_cfg.get("candidate_radius_close_contact", 1)),
+                    contact_dist_px_thr=float(audio_cfg.get("contact_dist_px_thr", 8)),
+                )
 
             onset = detect_onset_in_window(
                 onset_cache,
@@ -465,8 +517,30 @@ def run_audio_decision_for_right_events(
                 )
                 continue
 
+            if require_cv_vibration and cv_vibrated_sid is None:
+                events_out.append(
+                    _audio_reject_event(
+                        ev=ev,
+                        fps=fps_safe,
+                        thresholds=thresholds,
+                        pitch_backend=preferred_pitch_backend,
+                        status="no_cv_vibration",
+                        audio_window=audio_window,
+                        onset_time_sec=float(onset.onset_time_sec),
+                        onset_score=_float_or_none(onset.onset_score),
+                        candidate_strings=[],
+                        debug={
+                            "mode": decision_mode,
+                            "reason": "audio_onset_without_cv_vibrated_string",
+                            "onset": onset.debug,
+                            "touched_string_id": touched_sid,
+                        },
+                    )
+                )
+                continue
+
             if not use_pitch_tuning_match:
-                if touched_sid is None:
+                if resolved_sid is None:
                     events_out.append(
                         _audio_reject_event(
                             ev=ev,
@@ -480,7 +554,7 @@ def run_audio_decision_for_right_events(
                             candidate_strings=candidate_strings,
                             debug={
                                 "mode": decision_mode,
-                                "reason": "missing_touched_string_id",
+                                "reason": "missing_resolved_string_id",
                                 "onset": onset.debug,
                                 "distance_px": distance_px,
                             },
@@ -495,7 +569,7 @@ def run_audio_decision_for_right_events(
                     touch_conf=touch_conf,
                     weights=dict(audio_cfg.get("confidence_weights") or {}),
                 )
-                onset_only_candidates = [int(touched_sid)] if touched_sid is not None else []
+                onset_only_candidates = [int(resolved_sid)]
                 event = _audio_strike_event(
                     ev=ev,
                     fps=fps_safe,
@@ -506,37 +580,28 @@ def run_audio_decision_for_right_events(
                     onset_score=onset_z,
                     f0_hz=None,
                     pitch_conf=None,
-                    matched_string_id=int(touched_sid),
+                    matched_string_id=int(resolved_sid),
                     cents_error=None,
                     candidate_strings=onset_only_candidates,
                     confidence=conf,
+                    note_name=(resolved_tuning.note_name if resolved_tuning is not None else None),
+                    target_frequency_hz=(resolved_tuning.frequency_hz if resolved_tuning is not None else None),
+                    recognition_source=(
+                        "cv_vibration_map"
+                        if cv_vibrated_sid is not None
+                        else ("string_tuning_map" if resolved_tuning is not None else "onset_only")
+                    ),
                     debug={
                         "mode": decision_mode,
                         "rule": "onset_detected_at_touch",
                         "onset": onset.debug,
                         "distance_px": distance_px,
                         "touch_conf": touch_conf,
+                        "cv_vibrated_string_id": cv_vibrated_sid,
                     },
                 )
                 events_out.append(event)
-                touch_subset = event["touch"]
-                strike_out.append(
-                    {
-                        "event_id": str(event["event_id"]),
-                        "timestamp_sec": _float_or_none(touch_subset.get("timestamp_sec")),
-                        "frame_index": _int_or_none(touch_subset.get("frame_index")),
-                        "finger_type": str(touch_subset.get("finger_type") or ""),
-                        "touched_string_id": _int_or_none(touch_subset.get("touched_string_id")),
-                        "struck_string_id": int(touched_sid),
-                        "onset_time_sec": float(onset.onset_time_sec),
-                        "onset_frame_index": int(round(float(onset.onset_time_sec) * fps_safe)),
-                        "f0_hz": None,
-                        "pitch_conf": None,
-                        "cents_error": None,
-                        "confidence": float(conf),
-                        "confidence_label": str(event["decision"]["confidence_label"]),
-                    }
-                )
+                strike_out.append(_audio_strike_summary_row(event, fps_safe))
                 continue
 
             def _append_pitch_fallback_strike(
@@ -549,7 +614,7 @@ def run_audio_decision_for_right_events(
                 cents_error: float | None = None,
                 candidate_strings_override: list[int] | None = None,
             ) -> bool:
-                if not pitch_fallback_to_onset or touched_sid is None:
+                if not pitch_fallback_to_onset or resolved_sid is None:
                     return False
                 onset_z = float(onset.onset_score or 0.0)
                 touch_conf = _float_or_none(ev.get("touch_conf"))
@@ -570,10 +635,17 @@ def run_audio_decision_for_right_events(
                     onset_score=onset_z,
                     f0_hz=f0_hz,
                     pitch_conf=pitch_conf,
-                    matched_string_id=int(touched_sid),
+                    matched_string_id=int(resolved_sid),
                     cents_error=cents_error,
-                    candidate_strings=candidate_strings_override or [int(touched_sid)],
+                    candidate_strings=candidate_strings_override or [int(resolved_sid)],
                     confidence=conf,
+                    note_name=(resolved_tuning.note_name if resolved_tuning is not None else None),
+                    target_frequency_hz=(resolved_tuning.frequency_hz if resolved_tuning is not None else None),
+                    recognition_source=(
+                        "cv_vibration_fallback"
+                        if cv_vibrated_sid is not None
+                        else ("string_tuning_fallback" if resolved_tuning is not None else "onset_fallback")
+                    ),
                     debug={
                         "mode": decision_mode,
                         "rule": "pitch_failed_fallback_to_onset",
@@ -582,6 +654,7 @@ def run_audio_decision_for_right_events(
                         "pitch": pitch_debug or {},
                         "distance_px": distance_px,
                         "touch_conf": touch_conf,
+                        "cv_vibrated_string_id": cv_vibrated_sid,
                     },
                 )
                 events_out.append(event)
@@ -596,7 +669,7 @@ def run_audio_decision_for_right_events(
                 t0_sec=pitch_window_t0,
                 t1_sec=pitch_window_t1,
                 min_f0_hz=float(audio_cfg.get("min_f0_hz", 60)),
-                max_f0_hz=float(audio_cfg.get("max_f0_hz", 2000)),
+                max_f0_hz=float(audio_cfg.get("max_f0_hz", 1000)),
                 preferred_backend=preferred_pitch_backend,
             )
             if pitch.f0_hz is None:
@@ -626,14 +699,14 @@ def run_audio_decision_for_right_events(
             pitch_conf = float(pitch.pitch_conf if pitch.pitch_conf is not None else 0.0)
             f0_hz = float(pitch.f0_hz)
             min_f0 = float(audio_cfg.get("min_f0_hz", 60))
-            max_f0 = float(audio_cfg.get("max_f0_hz", 2000))
+            max_f0 = float(audio_cfg.get("max_f0_hz", 1000))
             if not (min_f0 <= f0_hz <= max_f0):
                 if _append_pitch_fallback_strike(
                     fallback_reason="pitch_out_of_range",
                     pitch_backend=str(pitch.backend),
                     pitch_debug=pitch.debug,
-                    f0_hz=f0_hz,
-                    pitch_conf=pitch_conf,
+                    f0_hz=None,
+                    pitch_conf=None,
                     candidate_strings_override=candidate_strings,
                 ):
                     continue
@@ -647,10 +720,15 @@ def run_audio_decision_for_right_events(
                         audio_window=audio_window,
                         onset_time_sec=float(onset.onset_time_sec),
                         onset_score=_float_or_none(onset.onset_score),
-                        f0_hz=f0_hz,
-                        pitch_conf=pitch_conf,
+                        f0_hz=None,
+                        pitch_conf=None,
                         candidate_strings=candidate_strings,
-                        debug={"onset": onset.debug, "pitch": pitch.debug},
+                        debug={
+                            "onset": onset.debug,
+                            "pitch": pitch.debug,
+                            "discarded_f0_hz": f0_hz,
+                            "max_f0_hz": max_f0,
+                        },
                     )
                 )
                 continue
@@ -729,6 +807,7 @@ def run_audio_decision_for_right_events(
                 max_cents_error=float(audio_cfg.get("max_cents_error", 50)),
                 weights=dict(audio_cfg.get("confidence_weights") or {}),
             )
+            matched_tuning = tuning_by_string.get(int(match.matched_string_id))
             event = _audio_strike_event(
                 ev=ev,
                 fps=fps_safe,
@@ -743,33 +822,22 @@ def run_audio_decision_for_right_events(
                 cents_error=cents_err,
                 candidate_strings=match.candidate_strings,
                 confidence=conf,
+                note_name=(matched_tuning.note_name if matched_tuning is not None else None),
+                target_frequency_hz=(matched_tuning.frequency_hz if matched_tuning is not None else None),
+                recognition_source=(
+                    "cv_vibration_pitch_match" if cv_vibrated_sid is not None else "pitch_match"
+                ),
                 debug={
                     "onset": onset.debug,
                     "pitch": pitch.debug,
                     "match": match.debug,
                     "pitch_window": {"t0": pitch_window_t0, "t1": pitch_window_t1},
                     "distance_px": distance_px,
+                    "cv_vibrated_string_id": cv_vibrated_sid,
                 },
             )
             events_out.append(event)
-            touch_subset = event["touch"]
-            strike_out.append(
-                {
-                    "event_id": str(event["event_id"]),
-                    "timestamp_sec": _float_or_none(touch_subset.get("timestamp_sec")),
-                    "frame_index": _int_or_none(touch_subset.get("frame_index")),
-                    "finger_type": str(touch_subset.get("finger_type") or ""),
-                    "touched_string_id": _int_or_none(touch_subset.get("touched_string_id")),
-                    "struck_string_id": int(match.matched_string_id),
-                    "onset_time_sec": float(onset.onset_time_sec),
-                    "onset_frame_index": int(round(float(onset.onset_time_sec) * fps_safe)),
-                    "f0_hz": f0_hz,
-                    "pitch_conf": pitch_conf,
-                    "cents_error": cents_err,
-                    "confidence": float(conf),
-                    "confidence_label": str(event["decision"]["confidence_label"]),
-                }
-            )
+            strike_out.append(_audio_strike_summary_row(event, fps_safe))
 
     status_counts = Counter(str(ev.get("audio", {}).get("status", "")) for ev in events_out)
     reject_counts = Counter(
@@ -789,6 +857,9 @@ def run_audio_decision_for_right_events(
             "audio_sample_rate": (int(sr) if sr is not None else None),
             "pitch_backend_preference": preferred_pitch_backend,
             "tuning_table_size": int(len(tuning_by_string)),
+            "min_f0_hz": float(audio_cfg.get("min_f0_hz", 60)),
+            "max_f0_hz": float(audio_cfg.get("max_f0_hz", 1000)),
+            "require_cv_vibration_for_audio_strike": require_cv_vibration,
         },
     )
     if tuning_load_error is not None:

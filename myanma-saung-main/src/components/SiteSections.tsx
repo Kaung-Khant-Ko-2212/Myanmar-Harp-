@@ -379,7 +379,7 @@ const LegacySystemArchitectureDiagram = () => {
           >
           <ArchitecturePanel title="Config" label="CONFIG" className="left-[10px] top-[60px] h-[110px] w-[140px] border-slate-300/35">
             <div className="grid grid-cols-2 gap-3 pt-2">
-              <MiniStep icon={<Gauge className="h-5 w-5" />} label="Fast Mode" />
+              <MiniStep icon={<Gauge className="h-5 w-5" />} label="Accurate Mode" />
               <MiniStep icon={<ClockIcon />} label="Timing Profile" />
             </div>
           </ArchitecturePanel>

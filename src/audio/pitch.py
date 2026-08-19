@@ -144,7 +144,8 @@ class TorchCrepePitchEstimator(PitchEstimator):
 
         try:
             hop_length = max(64, int(round(sr * 0.01)))
-            x = torch.from_numpy(segment.astype(np.float32, copy=False)).unsqueeze(0)
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            x = torch.from_numpy(segment.astype(np.float32, copy=False)).unsqueeze(0).to(device)
             out = torchcrepe.predict(
                 x,
                 int(sr),
@@ -153,7 +154,7 @@ class TorchCrepePitchEstimator(PitchEstimator):
                 float(max_f0_hz),
                 model="tiny",
                 batch_size=256,
-                device="cpu",
+                device=device,
                 return_periodicity=True,
             )
             if isinstance(out, tuple) and len(out) >= 2:
@@ -167,7 +168,13 @@ class TorchCrepePitchEstimator(PitchEstimator):
                 confs = periodicity_t.detach().cpu().numpy().reshape(-1).astype(np.float32)
             mask = np.isfinite(f0s) & (f0s >= float(min_f0_hz)) & (f0s <= float(max_f0_hz))
             f0, conf, dbg = _robust_pitch_summary(f0s[mask], (confs[mask] if confs is not None and np.any(mask) else None))
-            return PitchEstimateResult(f0, conf, self.backend_name, "ok" if f0 is not None else "no_pitch", {"hop_length": int(hop_length), **dbg})
+            return PitchEstimateResult(
+                f0,
+                conf,
+                self.backend_name,
+                "ok" if f0 is not None else "no_pitch",
+                {"hop_length": int(hop_length), "device": device, **dbg},
+            )
         except Exception as exc:  # noqa: BLE001
             return PitchEstimateResult(None, None, self.backend_name, "backend_error", {"error": str(exc)})
 
@@ -269,4 +276,3 @@ def estimate_pitch_with_fallbacks(
         if result.status == "ok":
             return result
     return last or PitchEstimateResult(None, None, preferred_backend or "unknown", "no_pitch", {"reason": "no_backends"})
-

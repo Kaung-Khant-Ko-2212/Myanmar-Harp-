@@ -108,12 +108,13 @@ DEFAULT_PIPELINE_CONFIG: dict[str, Any] = {
         "baseline_window_sec": 0.30,
         "onset_strength_hop": 256,
         "onset_threshold": 1.40,
-        "pitch_backend": "crepe",
+        "pitch_backend": "torchcrepe",
         "pitch_window_sec": 0.12,
         "min_f0_hz": 60.0,
-        "max_f0_hz": 2000.0,
+        "max_f0_hz": 1000.0,
         "min_pitch_conf": 0.50,
         "max_cents_error": 50.0,
+        "require_cv_vibration_for_audio_strike": True,
         "candidate_radius_default": 2,
         "candidate_radius_close_contact": 1,
         "contact_dist_px_thr": 8.0,
@@ -151,25 +152,39 @@ def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str
     return out
 
 
+def _resolve_repo_relative_paths(config: dict[str, Any]) -> dict[str, Any]:
+    out = dict(config)
+    repo_dir = Path(__file__).resolve().parents[2]
+    audio = dict(out.get("audio") or {})
+    tuning_value = audio.get("tuning_table_path")
+    if tuning_value:
+        tuning_path = Path(str(tuning_value))
+        if not tuning_path.is_absolute():
+            tuning_path = repo_dir / tuning_path
+        audio["tuning_table_path"] = str(tuning_path.resolve())
+    out["audio"] = audio
+    return out
+
+
 def load_pipeline_config(config_path: str | Path | None = None) -> dict[str, Any]:
     cfg = DEFAULT_PIPELINE_CONFIG
     if config_path is None:
-        return cfg
+        return _resolve_repo_relative_paths(cfg)
     path = Path(config_path)
     if not path.exists():
-        return cfg
+        return _resolve_repo_relative_paths(cfg)
     try:
         import yaml  # type: ignore
     except Exception:
-        return cfg
+        return _resolve_repo_relative_paths(cfg)
     try:
         with path.open("r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
     except Exception:
-        return cfg
+        return _resolve_repo_relative_paths(cfg)
     if not isinstance(loaded, dict):
-        return cfg
-    return _deep_merge_dict(cfg, loaded)
+        return _resolve_repo_relative_paths(cfg)
+    return _resolve_repo_relative_paths(_deep_merge_dict(cfg, loaded))
 
 
 def confidence_label(score: float, thresholds: dict[str, Any]) -> str:

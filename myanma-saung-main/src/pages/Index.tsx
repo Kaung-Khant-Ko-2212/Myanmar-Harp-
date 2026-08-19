@@ -5,9 +5,18 @@ import VideoUploadZone from '@/components/VideoUploadZone';
 import SoundWaveLoader from '@/components/SoundWaveLoader';
 import MusicalNotesDisplay from '@/components/MusicalNotesDisplay';
 import { CheckCircle2, Gauge, Settings2, UploadCloud, Zap } from 'lucide-react';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 type ProcessingStatus = 'idle' | 'analyzing' | 'detecting' | 'generating' | 'complete';
-type ProcessingMode = 'fast' | 'accurate';
 
 interface PredictionResponse {
   predicted_video_url?: string | null;
@@ -54,7 +63,7 @@ interface PredictionResponse {
     fusion_status_counts?: Record<string, number>;
   } | null;
   run_profile?: {
-    fast_mode?: boolean;
+    profile?: string;
     audio_decision_mode?: string | null;
   } | null;
 }
@@ -117,6 +126,7 @@ interface AudioDecisionTouchPayload {
   finger_x?: number | null;
   finger_y?: number | null;
   distance_px?: number | null;
+  cv_vibrated_string_id?: number | null;
 }
 
 interface AudioDecisionAudioPayload {
@@ -129,6 +139,9 @@ interface AudioDecisionAudioPayload {
   pitch_conf?: number | null;
   matched_string_id?: number | null;
   cents_error?: number | null;
+  note_name?: string | null;
+  target_frequency_hz?: number | null;
+  recognition_source?: string | null;
 }
 
 interface AudioDecisionDecisionPayload {
@@ -156,6 +169,12 @@ interface AvStrikeEventPayload {
   confidence?: number;
   confidence_label?: string;
   strategy?: string;
+  note_name?: string | null;
+  f0_hz?: number | null;
+  target_frequency_hz?: number | null;
+  pitch_conf?: number | null;
+  cents_error?: number | null;
+  recognition_source?: string | null;
 }
 
 interface TimelineEventPayload {
@@ -224,14 +243,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.PROD 
 
 const EVENT_ACTIVE_WINDOW_SEC = 0.2;
 const DISPLAY_FINGER_TYPES = new Set(['thumb', 'index']);
-const FAST_MODE_STRING_INFER_EVERY_N = 4;
-const FAST_MODE_MAX_STRIKE_EVENTS = 80;
-const FAST_MODE_STRIKE_MIN_EVENT_GAP_FRAMES = 12;
-const ACCURATE_MODE_STRING_INFER_EVERY_N = 1;
-const ACCURATE_MODE_MAX_STRIKE_EVENTS = 180;
+const MAX_AUDIO_F0_HZ = 1000;
+const ACCURATE_MODE_MAX_STRIKE_EVENTS = 500;
 const ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES = 6;
 const ACCURATE_MODE_AUDIO_DECISION_MODE = 'onset_pitch_match';
-const FAST_MODE_AUDIO_DECISION_MODE = 'onset_only';
 const ACTIVE_PREDICTION_JOB_STORAGE_KEY = 'myanmar-harp-active-prediction-job';
 
 const analyzerSteps = [
@@ -265,7 +280,6 @@ const Index = () => {
   const [audioDecisionEvents, setAudioDecisionEvents] = useState<AudioDecisionEventPayload[]>([]);
   const [avStrikeEvents, setAvStrikeEvents] = useState<AvStrikeEventPayload[]>([]);
   const [alternatingOnOffSlots, setAlternatingOnOffSlots] = useState<AlternatingOnOffSlotsPayload | null>(null);
-  const [processingMode, setProcessingMode] = useState<ProcessingMode>('fast');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJobFileName, setActiveJobFileName] = useState<string | null>(null);
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
@@ -552,23 +566,13 @@ const Index = () => {
 
     try {
       const query = new URLSearchParams();
-      const isFastMode = processingMode === 'fast';
-      query.set('fast_mode', String(isFastMode));
       query.set('audio_enabled', 'true');
       query.set('fusion_mode', 'av_fuse');
       query.set('enable_debug_report', 'true');
-      query.set('include_strike_debug', String(!isFastMode));
-      if (isFastMode) {
-        query.set('string_infer_every_n', String(FAST_MODE_STRING_INFER_EVERY_N));
-        query.set('max_strike_events', String(FAST_MODE_MAX_STRIKE_EVENTS));
-        query.set('strike_min_event_gap_frames', String(FAST_MODE_STRIKE_MIN_EVENT_GAP_FRAMES));
-        query.set('audio_decision_mode', FAST_MODE_AUDIO_DECISION_MODE);
-      } else {
-        query.set('string_infer_every_n', String(ACCURATE_MODE_STRING_INFER_EVERY_N));
-        query.set('max_strike_events', String(ACCURATE_MODE_MAX_STRIKE_EVENTS));
-        query.set('strike_min_event_gap_frames', String(ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES));
-        query.set('audio_decision_mode', ACCURATE_MODE_AUDIO_DECISION_MODE);
-      }
+      query.set('include_strike_debug', 'true');
+      query.set('max_strike_events', String(ACCURATE_MODE_MAX_STRIKE_EVENTS));
+      query.set('strike_min_event_gap_frames', String(ACCURATE_MODE_STRIKE_MIN_EVENT_GAP_FRAMES));
+      query.set('audio_decision_mode', ACCURATE_MODE_AUDIO_DECISION_MODE);
       const predictUrl = `${API_BASE_URL}/api/jobs/predict-video${query.toString() ? `?${query.toString()}` : ''}`;
 
       const response = await fetch(predictUrl, {
@@ -691,6 +695,74 @@ const Index = () => {
     return acc;
   }, {});
 
+  const audioNoteRows = visibleAudioDecisionEvents.flatMap((event, index) => {
+    const status = String(event.audio?.status ?? 'unknown').toLowerCase();
+    if (status !== 'strike') {
+      return [];
+    }
+    const detectedHzValue = Number(event.audio?.f0_hz);
+    const detectedHz =
+      Number.isFinite(detectedHzValue) && detectedHzValue > 0 && detectedHzValue <= MAX_AUDIO_F0_HZ
+        ? detectedHzValue
+        : null;
+    const targetHzValue = Number(event.audio?.target_frequency_hz);
+    const centsValue = Number(event.audio?.cents_error);
+    const pitchConfidenceValue = Number(event.audio?.pitch_conf);
+    const decisionConfidenceValue = Number(event.decision?.confidence);
+    const noteName = String(event.audio?.note_name ?? '').trim();
+    const recognitionSource = String(event.audio?.recognition_source ?? 'unmatched');
+    return [{
+      eventId: event.event_id ?? `audio-note-${index}`,
+      timeSec: Number(event.audio?.onset_time_sec ?? event.touch?.timestamp_sec ?? 0) || 0,
+      noteName: noteName || 'Unmatched',
+      detectedHz,
+      targetHz: Number.isFinite(targetHzValue) && targetHzValue > 0 ? targetHzValue : null,
+      centsError: Number.isFinite(centsValue) ? centsValue : null,
+      pitchConfidence: Number.isFinite(pitchConfidenceValue) ? pitchConfidenceValue : null,
+      decisionConfidence: Number.isFinite(decisionConfidenceValue) ? decisionConfidenceValue : 0,
+      touchedStringId: event.touch?.touched_string_id ?? null,
+      cvVibratedStringId: event.touch?.cv_vibrated_string_id ?? null,
+      struckStringId: event.decision?.struck_string_id ?? event.audio?.matched_string_id ?? null,
+      recognitionSource,
+      status,
+      recognized: noteName.length > 0,
+      pitchMatched: recognitionSource.endsWith('pitch_match'),
+      mappedFromCv: recognitionSource.startsWith('cv_vibration'),
+    }];
+  });
+
+  const noteSummaryRows = Object.values(
+    audioNoteRows
+      .filter((row) => row.recognized)
+      .reduce<Record<string, { noteName: string; count: number; targetHzTotal: number; targetHzCount: number; confidenceTotal: number }>>(
+        (acc, row) => {
+          const current = acc[row.noteName] ?? {
+            noteName: row.noteName,
+            count: 0,
+            targetHzTotal: 0,
+            targetHzCount: 0,
+            confidenceTotal: 0,
+          };
+          current.count += 1;
+          if (row.targetHz !== null) {
+            current.targetHzTotal += row.targetHz;
+            current.targetHzCount += 1;
+          }
+          current.confidenceTotal += row.pitchConfidence ?? row.decisionConfidence;
+          acc[row.noteName] = current;
+          return acc;
+        },
+        {},
+      ),
+  )
+    .map((row) => ({
+      noteName: row.noteName,
+      count: row.count,
+      targetHz: row.targetHzCount > 0 ? row.targetHzTotal / row.targetHzCount : null,
+      averageConfidence: row.confidenceTotal / Math.max(row.count, 1),
+    }))
+    .sort((a, b) => b.count - a.count || a.noteName.localeCompare(b.noteName));
+
   const touchMappingRows =
     touchEvents.length > 0
       ? [...touchEvents]
@@ -803,30 +875,14 @@ const Index = () => {
                       <div>
                         <div className="flex items-center gap-2">
                           <Gauge className="h-4 w-4 text-emerald-300" />
-                          <h3 className="text-sm font-semibold text-white">Processing mode</h3>
+                          <h3 className="text-sm font-semibold text-white">Analysis profile</h3>
                         </div>
                         <p className="mt-1.5 text-xs leading-5 text-white/55">
-                          {processingMode === 'fast'
-                            ? `Fast: YOLO every ${FAST_MODE_STRING_INFER_EVERY_N} frames, ${FAST_MODE_MAX_STRIKE_EVENTS} strike checks.`
-                            : `Accurate: YOLO every frame, ${ACCURATE_MODE_MAX_STRIKE_EVENTS} strike checks, pitch matching.`}
+                          Accurate analysis always runs YOLO on every frame, evaluates up to {ACCURATE_MODE_MAX_STRIKE_EVENTS} touch events, and uses audio pitch matching.
                         </p>
                       </div>
-                      <div className="grid grid-cols-2 rounded-lg border border-white/10 bg-black/25 p-1">
-                        {(['fast', 'accurate'] as ProcessingMode[]).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            disabled={isProcessing}
-                            onClick={() => setProcessingMode(mode)}
-                            className={`rounded-md px-3 py-2 text-xs font-medium capitalize transition-colors ${
-                              processingMode === mode
-                                ? 'bg-cyan-300/20 text-cyan-100 ring-1 ring-cyan-300/35'
-                                : 'text-white/55 hover:bg-white/5 hover:text-white/80'
-                            } ${isProcessing ? 'cursor-not-allowed opacity-60' : ''}`}
-                          >
-                            {mode}
-                          </button>
-                        ))}
+                      <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs font-medium text-cyan-100">
+                        Accurate profile
                       </div>
                     </div>
                   </div>
@@ -960,7 +1016,7 @@ const Index = () => {
 
           {/* Predicted Video */}
           {status === 'complete' && predictedVideoUrl && (
-            <div className="max-w-6xl mx-auto glass-strong rounded-2xl p-6 animate-fade-in">
+            <div className="mx-auto w-full max-w-6xl animate-fade-in">
               <div className="mb-4">
                 <h3 className="font-heading text-lg font-bold">Predicted Video</h3>
                 <p className="text-xs text-muted-foreground">
@@ -1017,7 +1073,7 @@ const Index = () => {
               </div>
 
               {timelineEvents.length > 0 && (
-                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-3">
+                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-4">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <p className="text-xs font-medium text-foreground/90">
                       {usingAvStrikeTimeline ? 'AV Strike Timeline' : 'Vibration Timeline'} ({timelineEvents.length} event{timelineEvents.length === 1 ? '' : 's'})
@@ -1110,7 +1166,7 @@ const Index = () => {
               )}
 
               {predictionDebugSummary && (
-                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-3 text-xs">
+                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-4 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <p className="font-medium text-foreground/90">Audio Mapping Diagnostics</p>
                     <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
@@ -1196,7 +1252,7 @@ const Index = () => {
               )}
 
               {touchMappingRows.length > 0 && (
-                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-3">
+                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-4">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <p className="text-xs font-medium text-foreground/90">
                       Touch Mapping Results ({touchMappingRows.length})
@@ -1248,8 +1304,188 @@ const Index = () => {
                 </div>
               )}
 
+              {audioNoteRows.length > 0 && (
+                <div className="mt-4 space-y-4 rounded-xl border border-cyan-300/20 bg-background/20 p-4">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground/95">Audio Strike Notes</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Audio confirms the onset; note identity follows the CV-vibrated string. Pitch estimates above {MAX_AUDIO_F0_HZ} Hz are discarded.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                      <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-1">
+                        strikes: {audioNoteRows.length}
+                      </span>
+                      <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-1">
+                        notes shown: {audioNoteRows.filter((row) => row.recognized).length}
+                      </span>
+                      <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-1">
+                        pitch matched: {audioNoteRows.filter((row) => row.pitchMatched).length}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+                    <div className="h-72 rounded-xl border border-white/10 bg-black/15 p-3">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={audioNoteRows} margin={{ top: 12, right: 18, left: 4, bottom: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                          <XAxis
+                            dataKey="timeSec"
+                            type="number"
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={(value) => `${Number(value).toFixed(1)}s`}
+                            stroke="rgba(255,255,255,0.45)"
+                            fontSize={11}
+                          />
+                          <YAxis
+                            domain={[0, MAX_AUDIO_F0_HZ]}
+                            tickFormatter={(value) => `${Math.round(Number(value))}`}
+                            stroke="rgba(255,255,255,0.45)"
+                            fontSize={11}
+                            width={46}
+                            label={{ value: 'Hz', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.5)' }}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: 'rgba(8, 15, 28, 0.96)',
+                              border: '1px solid rgba(103, 232, 249, 0.25)',
+                              borderRadius: '10px',
+                              fontSize: '12px',
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Line
+                            type="monotone"
+                            dataKey="detectedHz"
+                            name="Detected Hz"
+                            stroke="#67e8f9"
+                            strokeWidth={2}
+                            dot={{ r: 3, fill: '#67e8f9' }}
+                          />
+                          <Line
+                            type="stepAfter"
+                            dataKey="targetHz"
+                            name="Target Hz"
+                            stroke="#86efac"
+                            strokeWidth={1.5}
+                            strokeDasharray="5 4"
+                            connectNulls={false}
+                            dot={{ r: 2, fill: '#86efac' }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="overflow-hidden rounded-xl border border-white/10 bg-black/15">
+                      <div className="border-b border-white/10 px-3 py-2">
+                        <p className="text-xs font-medium text-foreground/90">Recognized-note summary</p>
+                      </div>
+                      <div className="max-h-64 overflow-auto">
+                        <table className="w-full text-left text-[11px]">
+                          <thead className="sticky top-0 bg-slate-950/95 text-muted-foreground">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Note</th>
+                              <th className="px-3 py-2 text-right font-medium">Count</th>
+                              <th className="px-3 py-2 text-right font-medium">Target Hz</th>
+                              <th className="px-3 py-2 text-right font-medium">Conf.</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {noteSummaryRows.map((row) => (
+                              <tr key={`note-summary-${row.noteName}`} className="border-t border-white/5">
+                                <td className="px-3 py-2 font-semibold text-cyan-100">{row.noteName}</td>
+                                <td className="px-3 py-2 text-right">{row.count}</td>
+                                <td className="px-3 py-2 text-right">{row.targetHz?.toFixed(2) ?? '-'}</td>
+                                <td className="px-3 py-2 text-right">{row.averageConfidence.toFixed(2)}</td>
+                              </tr>
+                            ))}
+                            {noteSummaryRows.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                                  No audio strike notes were available.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-white/10 bg-black/15">
+                    <div className="max-h-72 overflow-auto">
+                      <table className="w-full min-w-[860px] text-left text-xs">
+                        <thead className="sticky top-0 bg-slate-950/95 text-muted-foreground">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Time</th>
+                            <th className="px-3 py-2 font-medium">Note</th>
+                            <th className="px-3 py-2 text-right font-medium">Detected Hz</th>
+                            <th className="px-3 py-2 text-right font-medium">Target Hz</th>
+                            <th className="px-3 py-2 text-right font-medium">Cents</th>
+                            <th className="px-3 py-2 text-right font-medium">String</th>
+                            <th className="px-3 py-2 text-right font-medium">Pitch conf.</th>
+                            <th className="px-3 py-2 font-medium">Result</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {audioNoteRows.slice(0, 500).map((row) => (
+                            <tr key={`pitch-row-${row.eventId}`} className="border-t border-white/5 hover:bg-white/[0.03]">
+                              <td className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  className="font-medium text-cyan-200 hover:text-cyan-100"
+                                  onClick={() => {
+                                    const video = predictedVideoRef.current;
+                                    if (video) {
+                                      video.currentTime = row.timeSec;
+                                      setCurrentVideoTime(row.timeSec);
+                                      video.pause();
+                                    }
+                                  }}
+                                >
+                                  {formatSeconds(row.timeSec)}
+                                </button>
+                              </td>
+                              <td className={`px-3 py-2 font-semibold ${row.recognized ? 'text-emerald-200' : 'text-amber-200'}`}>
+                                {row.noteName}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums">{row.detectedHz?.toFixed(2) ?? '-'}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{row.targetHz?.toFixed(2) ?? '-'}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">
+                                {row.centsError !== null ? `${row.centsError > 0 ? '+' : ''}${row.centsError.toFixed(1)}` : '-'}
+                              </td>
+                              <td className="px-3 py-2 text-right">s{row.struckStringId ?? row.touchedStringId ?? '?'}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">
+                                {row.pitchConfidence?.toFixed(2) ?? '-'}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                                  row.recognized
+                                    ? 'border-emerald-300/30 bg-emerald-400/10 text-emerald-200'
+                                    : 'border-amber-300/30 bg-amber-400/10 text-amber-200'
+                                }`}>
+                                  {row.pitchMatched
+                                    ? 'CV + pitch'
+                                    : row.mappedFromCv
+                                      ? 'CV vibration map'
+                                      : row.recognized
+                                        ? 'string tuning map'
+                                      : row.status.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {visibleAudioDecisionEvents.length > 0 && (
-                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-3">
+                <div className="mt-4 rounded-xl border border-border/40 bg-background/20 p-4">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-foreground/90">
@@ -1278,6 +1514,14 @@ const Index = () => {
                       const decidedStringId = event.decision?.struck_string_id ?? event.audio?.matched_string_id ?? null;
                       const confidence = Number(event.decision?.confidence ?? 0) || 0;
                       const onsetScore = event.audio?.onset_score;
+                      const noteName = String(event.audio?.note_name ?? '').trim();
+                      const detectedHzValue = Number(event.audio?.f0_hz);
+                      const detectedHz =
+                        Number.isFinite(detectedHzValue) &&
+                        detectedHzValue > 0 &&
+                        detectedHzValue <= MAX_AUDIO_F0_HZ
+                          ? detectedHzValue
+                          : null;
                       const badgeClass = isStrike
                         ? 'border-emerald-300/40 bg-emerald-500/10 text-emerald-200'
                         : status === 'no_audio'
@@ -1305,12 +1549,14 @@ const Index = () => {
                             <span className="font-medium">{formatSeconds(touchTime)}</span>
                             <span className="text-muted-foreground truncate">
                               touch s{touchedStringId ?? '?'} {'->'} audio {isStrike ? `s${decidedStringId ?? '?'}` : 'no strike'}
+                              {noteName ? ` | ${noteName}` : ''}
                             </span>
                             <span className={`rounded-full border px-2 py-0.5 ${badgeClass}`}>
                               {status}
                             </span>
                           </span>
                           <span className="text-muted-foreground">
+                            {detectedHz !== null ? `${detectedHz.toFixed(2)} Hz | ` : ''}
                             onset {typeof onsetScore === 'number' ? onsetScore.toFixed(2) : '-'} | conf {confidence.toFixed(2)}
                           </span>
                         </button>

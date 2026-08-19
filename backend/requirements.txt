@@ -7,5 +7,6 @@ imageio-ffmpeg
 mediapipe
 librosa
 soundfile
+torchcrepe
 PyYAML
 python-multipart

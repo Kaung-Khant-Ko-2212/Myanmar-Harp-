@@ -36,6 +36,12 @@ class StrikeResult:
     best_metrics: DecisionMetrics
     second_metrics: DecisionMetrics
     debug: dict[str, Any]
+    touch_conf: float | None = None
+    distance_px: float | None = None
+    contact_x: float | None = None
+    contact_y: float | None = None
+    finger_x: float | None = None
+    finger_y: float | None = None
 
 
 def _to_int_string_id(value: Any) -> int:
@@ -698,6 +704,24 @@ def decide_event_from_window(
         best_metrics=best_metrics,
         second_metrics=second_metrics,
         debug=debug,
+        touch_conf=float(event_window.event.touch_conf),
+        distance_px=(
+            None
+            if event_window.event.distance_px is None
+            else float(event_window.event.distance_px)
+        ),
+        contact_x=float(event_window.event.contact_x),
+        contact_y=float(event_window.event.contact_y),
+        finger_x=(
+            None
+            if event_window.event.finger_x is None
+            else float(event_window.event.finger_x)
+        ),
+        finger_y=(
+            None
+            if event_window.event.finger_y is None
+            else float(event_window.event.finger_y)
+        ),
     )
 
 
@@ -968,7 +992,14 @@ def decide_touch_events(
     event_velocity_stats_by_event: dict[int, dict[str, float]] | None = None,
 ) -> list[StrikeResult]:
     results: list[StrikeResult] = []
-    for ev in touch_events:
+    total_events = len(touch_events)
+    for event_index, ev in enumerate(touch_events, start=1):
+        if total_events >= 10 and (event_index == 1 or event_index % 10 == 0 or event_index == total_events):
+            print(
+                "[INFO] Strike decision progress: "
+                f"{event_index}/{total_events} events",
+                flush=True,
+            )
         row_key = int(ev.row_index)
         results.append(
             decide_single_touch_event(

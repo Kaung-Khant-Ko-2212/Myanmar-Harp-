@@ -92,6 +92,7 @@ class TouchEvent:
     finger_x: float | None
     finger_y: float | None
     row_index: int
+    distance_px: float | None = None
     hand_bbox_x1: float | None = None
     hand_bbox_y1: float | None = None
     hand_bbox_x2: float | None = None
@@ -188,6 +189,7 @@ def parse_touch_events_csv(path: str | Path) -> list[TouchEvent]:
                 finger_x=_parse_optional_float(row.get("finger_x")),
                 finger_y=_parse_optional_float(row.get("finger_y")),
                 row_index=row_index,
+                distance_px=_parse_optional_float(row.get("distance_px")),
                 hand_bbox_x1=_parse_optional_float(row.get("hand_bbox_x1")),
                 hand_bbox_y1=_parse_optional_float(row.get("hand_bbox_y1")),
                 hand_bbox_x2=_parse_optional_float(row.get("hand_bbox_x2")),

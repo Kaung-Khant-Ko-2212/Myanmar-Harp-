@@ -179,10 +179,10 @@ const MusicalNotesDisplay = ({ isVisible, alternatingSlots }: MusicalNotesDispla
   if (!isVisible) return null;
 
   return (
-    <div className={`w-full mx-auto grid gap-6 animate-fade-in ${hasAlternatingGrid ? 'max-w-screen-2xl grid-cols-1' : 'max-w-6xl md:grid-cols-2'}`}>
+    <div className={`w-full max-w-6xl mx-auto grid gap-6 animate-fade-in ${hasAlternatingGrid ? 'grid-cols-1' : 'md:grid-cols-2'}`}>
       {!hasAlternatingGrid ? (
         /* Detected Strings */
-        <div className="glass-strong rounded-2xl p-6">
+        <div className="glass-strong rounded-2xl p-4 sm:p-5">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
               <Music2 className="w-5 h-5 text-primary" />
@@ -239,24 +239,34 @@ const MusicalNotesDisplay = ({ isVisible, alternatingSlots }: MusicalNotesDispla
       ) : null}
 
       {/* Generated Notes */}
-      <div className="glass-strong rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div 
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
-            style={{ 
-              background: 'hsl(var(--gold) / 0.2)',
-            }}
-          >
-            <Music className="w-5 h-5 text-gold" />
-          </div>
-          <div>
-            <h3 className="font-heading text-lg font-bold">Generated Notes</h3>
-            <p className="text-xs text-muted-foreground">Musical notation sequence</p>
+      <div className="glass-strong relative overflow-hidden rounded-2xl p-4 sm:p-5">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center"
+              style={{
+                background: 'hsl(var(--gold) / 0.2)',
+              }}
+            >
+              <Music className="w-5 h-5 text-gold" />
+            </div>
+            <div>
+              <h3 className="font-heading text-lg font-bold">Generated Notes</h3>
+              <p className="text-xs text-muted-foreground">Musical notation sequence</p>
+            </div>
           </div>
         </div>
 
         {notePairs.length > 0 ? (
           <>
+            <div
+              aria-label="Generated Notes is a work in progress"
+              className="pointer-events-none absolute left-1/2 top-[58%] z-20 w-[calc(100%-1rem)] -translate-x-1/2 -translate-y-1/2 rotate-[-16deg] select-none text-center"
+            >
+              <span className="inline-block max-w-full border-4 border-yellow-300/30 bg-yellow-300/[0.04] px-6 py-3 text-4xl font-bold uppercase text-yellow-300/20 sm:px-10 sm:py-4 sm:text-7xl lg:text-8xl">
+                Work in progress
+              </span>
+            </div>
             <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
               <span>Each card = one on/off beat pair</span>
               <span>Dot on number = left hand involved in that slot</span>

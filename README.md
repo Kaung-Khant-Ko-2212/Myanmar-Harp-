@@ -49,7 +49,7 @@ The system is split into clear layers:
 ## Features
 
 - Upload MP4/MOV/WEBM performance clips.
-- Run fast or accurate analysis profiles.
+- Run the full high-accuracy analysis profile on every upload.
 - Detect string geometry and fingertip touch candidates.
 - Infer struck strings using video motion and rule-based filtering.
 - Fuse visual evidence with audio onset/pitch evidence.
